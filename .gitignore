@@ -1,0 +1,26 @@
+# IDE
+.vs/
+.vscode/
+
+# Build output ở mọi cấp
+**/bin/
+**/obj/
+
+# User files
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# Logs & temp
+**/logs/
+*.log
+
+# Secrets (local only)
+**/appsettings.Local.json
+
+# HTTP test file
+**/*.http
+
+# Publish artifacts (nếu có)
+**/publish/

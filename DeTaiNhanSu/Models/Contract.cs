@@ -1,0 +1,29 @@
+﻿using System.Diagnostics.Contracts;
+using DeTaiNhanSu.Enums;
+
+namespace DeTaiNhanSu.Models
+{
+    public class Contract
+    {
+        public Guid Id { get; set; }
+        public Guid EmployeeId { get; set; }
+        public string ContractNumber { get; set; } = default!;
+        public string? Title { get; set; }
+        public ContractType Type { get; set; }
+        public DateOnly? SignedDate { get; set; }
+        public DateOnly StartDate { get; set; }
+        public DateOnly? EndDate { get; set; }
+        public WorkType WorkType { get; set; } = WorkType.fulltime;
+        public decimal BasicSalary { get; set; }
+        public decimal? InsuranceSalary { get; set; }
+        public Guid? RepresentativeId { get; set; }
+        public ContractStatus Status { get; set; }
+        public string? AttachmentUrl { get; set; }
+        public string? Notes { get; set; }
+
+        public Employee Employee { get; set; } = default!;
+        public User? Representative { get; set; }
+
+        public DateOnly? LastExpiryNotifyDate { get; set; }
+    }
+}
