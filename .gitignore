@@ -24,3 +24,8 @@
 
 # Publish artifacts (nếu có)
 **/publish/
+
+DeTaiNhanSu/appsettings.json
+DeTaiNhanSu/appsettings.Development.json
+**/appsettings.Local.json
+
