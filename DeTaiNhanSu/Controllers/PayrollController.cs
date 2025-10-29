@@ -1,6 +1,6 @@
 ﻿using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Models;
-using DeTaiNhanSu.Enums; // ĐÃ THÊM USING ENUMS
+using DeTaiNhanSu.Enums;
 using Microsoft.AspNetCore.Mvc;
 using System;
 using System.Linq.Dynamic.Core;
@@ -9,11 +9,12 @@ using System.Linq.Dynamic.Core.Exceptions;
 using System.Linq;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Globalization;
 
 namespace DeTaiNhanSu.Controllers
 {
     // =================================================================
-    //                   DTOs VÀ PHƯƠNG THỨC HỖ TRỢ
+    // DTOs VÀ PHƯƠNG THỨC HỖ TRỢ (GIỮ NGUYÊN)
     // =================================================================
     public class FinalizeBatchPayrollRequest
     {
@@ -65,33 +66,64 @@ namespace DeTaiNhanSu.Controllers
         }
 
         // =================================================================
-        //                   PHƯƠNG THỨC TÍNH TOÁN LƯƠNG CHUNG (CORE LOGIC)
+        // PHƯƠNG THỨC HỖ TRỢ ĐỌC GLOBAL SETTINGS
+        // =================================================================
+        private async Task<decimal> GetGlobalSettingValue(string key, decimal defaultValue)
+        {
+            var setting = await _context.GlobalSettings.AsNoTracking()
+                                       .FirstOrDefaultAsync(s => s.Key == key);
+
+            if (setting != null && decimal.TryParse(setting.Value, CultureInfo.InvariantCulture, out decimal rate))
+            {
+                return rate;
+            }
+            return defaultValue;
+        }
+
+        private async Task<string> GetGlobalSettingString(string key, string defaultValue)
+        {
+            var setting = await _context.GlobalSettings.AsNoTracking()
+                                       .FirstOrDefaultAsync(s => s.Key == key);
+
+            return setting?.Value ?? defaultValue;
+        }
+
+        // =================================================================
+        // PHƯƠNG THỨC TÍNH TOÁN LƯƠNG CHUNG (CORE LOGIC)
         // =================================================================
         private async Task<PayrollCalculationResult?> CalculateEmployeePayroll(Guid employeeId, DateTime startDate, DateTime endDate)
         {
-            // CHUYỂN ĐỔI NGÀY BẮT ĐẦU/KẾT THÚC SANG DATEONLY ĐỂ TRUY VẤN
             var startOnly = DateOnly.FromDateTime(startDate);
             var endOnly = DateOnly.FromDateTime(endDate);
 
             var contract = await _context.Contracts.FirstOrDefaultAsync(c => c.EmployeeId == employeeId && c.Status == ContractStatus.active);
             if (contract == null) return null;
 
-            // TRUY VẤN SỬ DỤNG DATEONLY (FIXED)
             var attendanceList = await _context.Attendances
                 .Where(a => a.EmployeeId == employeeId && a.Date >= startOnly && a.Date <= endOnly).ToListAsync();
             var otList = await _context.Overtimes
                 .Where(o => o.EmployeeId == employeeId && o.Date >= startOnly && o.Date <= endOnly).ToListAsync();
 
-            // TRUY VẤN REWARDPENALTIES SỬ DỤNG DATEONLY (FIXED LỖI)
-            // r.DecidedAt là DateOnly, so sánh trực tiếp với startOnly/endOnly
             var rewards = await _context.RewardPenalties.Include(r => r.Type)
                 .Where(r => r.EmployeeId == employeeId && r.DecidedAt >= startOnly && r.DecidedAt <= endOnly)
                 .ToListAsync();
 
             var salaryPreview = await _context.Salaries.Include(s => s.Items).OrderByDescending(s => s.PayrollRunId).FirstOrDefaultAsync(s => s.EmployeeId == employeeId);
-            var insurance = await _context.InsuranceProfiles.FirstOrDefaultAsync(i => i.EmployeeId == employeeId);
 
-            int soCongPhanCong = Enumerable.Range(0, (endDate - startDate).Days + 1).Select(i => startDate.AddDays(i)).Count(d => d.DayOfWeek != DayOfWeek.Sunday);
+            // =================================================================
+            // LOGIC MỚI: TÍNH SỐ CÔNG PHÂN CÔNG THEO GLOBAL SETTINGS
+            // =================================================================
+            string weekendDaysString = await GetGlobalSettingString("WEEKEND_DAYS", "Sunday");
+            var configuredWeekendDays = weekendDaysString.Split(',')
+                .Select(d => d.Trim())
+                .Where(d => Enum.TryParse(d, true, out DayOfWeek _))
+                .Select(d => (DayOfWeek)Enum.Parse(typeof(DayOfWeek), d, true))
+                .ToList();
+
+            int soCongPhanCong = Enumerable.Range(0, (endDate - startDate).Days + 1)
+                .Select(i => startDate.AddDays(i))
+                .Count(d => !configuredWeekendDays.Contains(d.DayOfWeek));
+            // =================================================================
 
             decimal tongCongThucTe = 0;
             int soLanDiMuon = 0;
@@ -172,22 +204,26 @@ namespace DeTaiNhanSu.Controllers
                 }
             }
 
-            // Thưởng / phạt, Phụ cấp (Dùng Enum)
+            // Thưởng / phạt, Phụ cấp
             decimal tongThuong = rewards.Where(r => r.Type.Type == RewardPenaltyKind.reward).Sum(r => r.AmountOverride.GetValueOrDefault(r.Type.DefaultAmount ?? 0));
             decimal tongPhat = rewards.Where(r => r.Type.Type == RewardPenaltyKind.penalty).Sum(r => r.AmountOverride.GetValueOrDefault(r.Type.DefaultAmount ?? 0));
 
             decimal tongPhuCap = salaryPreview?.Items?.Where(i => i.Type == SalaryItemType.allowance).Sum(i => i.Amount) ?? 0;
 
             // Tính lương OT
-            decimal heSoOT = otList.FirstOrDefault()?.Rate ?? 1.5m;
+            decimal heSoOT = otList.FirstOrDefault()?.Rate ?? await GetGlobalSettingValue("DEFAULT_OT_RATE", 1.5m);
             decimal luongOTThucTe = tongGioOTThucTe * luongMotGio * heSoOT;
 
-            // Bảo hiểm
-            decimal bhxh = insurance?.Bhxh ?? 0.08m;
-            decimal bhyt = insurance?.Bhyt ?? 0.015m;
-            decimal bhtn = insurance?.Bhtn ?? 0.01m;
-            decimal insuranceSalary = contract.InsuranceSalary.HasValue && contract.InsuranceSalary.Value > 0 ? contract.InsuranceSalary.Value : contract.BasicSalary;
-            decimal tongBaoHiem = (bhxh + bhyt + bhtn) * insuranceSalary;
+            // BẢO HIỂM (ĐỌC TỪ GLOBAL SETTINGS)
+            decimal bhxhRate = await GetGlobalSettingValue("EMP_BHXH_RATE", 0.08m);
+            decimal bhytRate = await GetGlobalSettingValue("EMP_BHYT_RATE", 0.015m);
+            decimal bhtnRate = await GetGlobalSettingValue("EMP_BHTN_RATE", 0.01m);
+
+            decimal insuranceSalary = contract.InsuranceSalary.HasValue && contract.InsuranceSalary.Value > 0
+                ? contract.InsuranceSalary.Value
+                : contract.BasicSalary;
+
+            decimal tongBaoHiem = (bhxhRate + bhytRate + bhtnRate) * insuranceSalary;
 
             // Lương Net/Gross
             decimal luongNgayCongThucTe = luongMotNgayCong * tongCongThucTe;
@@ -221,7 +257,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         // =================================================================
-        //                   API GET PERFORMANCE (Tính lương tổng hợp)
+        // API GET PERFORMANCE (Tính lương tổng hợp)
         // =================================================================
         [HttpGet("performance/{employeeId}")]
         public async Task<IActionResult> GetPerformance(Guid employeeId, [FromQuery] string? month)
@@ -238,10 +274,10 @@ namespace DeTaiNhanSu.Controllers
 
             if (calculatedResult == null) return CreateErrorResponse(404, "Không tìm thấy hợp đồng đang hoạt động cho nhân viên này.");
 
-            var insurance = await _context.InsuranceProfiles.FirstOrDefaultAsync(i => i.EmployeeId == employeeId);
-            decimal bhxh = insurance?.Bhxh ?? 0.08m;
-            decimal bhyt = insurance?.Bhyt ?? 0.015m;
-            decimal bhtn = insurance?.Bhtn ?? 0.01m;
+            // Lấy Tỷ lệ BHXH, BHYT, BHTN từ GlobalSettings để trả về cho UI
+            decimal bhxh = await GetGlobalSettingValue("EMP_BHXH_RATE", 0.08m);
+            decimal bhyt = await GetGlobalSettingValue("EMP_BHYT_RATE", 0.015m);
+            decimal bhtn = await GetGlobalSettingValue("EMP_BHTN_RATE", 0.01m);
 
 
             // CHỈNH SỬA: Chuyển Enum ContractType sang string khi trả về JSON
@@ -292,7 +328,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         // =================================================================
-        //                   API GET DAILY DETAILS (Chi tiết theo ngày)
+        // API GET DAILY DETAILS (Chi tiết theo ngày)
         // =================================================================
         [HttpGet("daily/{employeeId}")]
         public async Task<IActionResult> GetDailyDetails(Guid employeeId, [FromQuery] string? month)
@@ -305,7 +341,6 @@ namespace DeTaiNhanSu.Controllers
 
             var endDate = startDate.AddMonths(1).AddDays(-1);
 
-            // CHUYỂN ĐỔI NGÀY BẮT ĐẦU/KẾT THÚC SANG DATEONLY ĐỂ TRUY VẤN
             var startOnly = DateOnly.FromDateTime(startDate);
             var endOnly = DateOnly.FromDateTime(endDate);
 
@@ -313,13 +348,25 @@ namespace DeTaiNhanSu.Controllers
             var contract = await _context.Contracts.FirstOrDefaultAsync(c => c.EmployeeId == employeeId && c.Status == ContractStatus.active);
             if (contract == null) return CreateErrorResponse(404, "Không tìm thấy hợp đồng đang hoạt động cho nhân viên này.");
 
-            int soCongPhanCong = Enumerable.Range(0, (endDate - startDate).Days + 1).Select(i => startDate.AddDays(i)).Count(d => d.DayOfWeek != DayOfWeek.Sunday);
+            // =================================================================
+            // LOGIC MỚI: TÍNH SỐ CÔNG PHÂN CÔNG THEO GLOBAL SETTINGS
+            // =================================================================
+            string weekendDaysString = await GetGlobalSettingString("WEEKEND_DAYS", "Sunday");
+            var configuredWeekendDays = weekendDaysString.Split(',')
+                .Select(d => d.Trim())
+                .Where(d => Enum.TryParse(d, true, out DayOfWeek _))
+                .Select(d => (DayOfWeek)Enum.Parse(typeof(DayOfWeek), d, true))
+                .ToList();
 
-            // TRUY VẤN SỬ DỤNG DATEONLY (FIXED)
+            int soCongPhanCong = Enumerable.Range(0, (endDate - startDate).Days + 1)
+                .Select(i => startDate.AddDays(i))
+                .Count(d => !configuredWeekendDays.Contains(d.DayOfWeek));
+            // =================================================================
+
+
             var attendanceList = await _context.Attendances.Where(a => a.EmployeeId == employeeId && a.Date >= startOnly && a.Date <= endOnly).ToListAsync();
             var otList = await _context.Overtimes.Where(o => o.EmployeeId == employeeId && o.Date >= startOnly && o.Date <= endOnly).ToListAsync();
 
-            // TRUY VẤN REWARDPENALTIES SỬ DỤNG DATEONLY (FIXED LỖI)
             var rewards = await _context.RewardPenalties.Include(r => r.Type)
                 .Where(r => r.EmployeeId == employeeId && r.DecidedAt >= startOnly && r.DecidedAt <= endOnly).ToListAsync();
 
@@ -338,7 +385,7 @@ namespace DeTaiNhanSu.Controllers
 
             foreach (var day in daysInMonth)
             {
-                var currentDayOnly = DateOnly.FromDateTime(day); // TẠO DATEONLY ĐỂ SO SÁNH TRONG BỘ NHỚ
+                var currentDayOnly = DateOnly.FromDateTime(day);
 
                 var att = attendanceList.FirstOrDefault(a => a.Date == currentDayOnly);
                 var otRecord = otList.FirstOrDefault(o => o.Date == currentDayOnly);
@@ -420,7 +467,6 @@ namespace DeTaiNhanSu.Controllers
 
                 decimal luongNgay = luongMotNgayCong * soCong;
 
-                // CHỈNH SỬA: Dùng DecidedAt (DateOnly) và currentDayOnly (DateOnly)
                 decimal phatTrongNgay = rewards.Where(r => r.Type.Type == RewardPenaltyKind.penalty && r.DecidedAt == currentDayOnly).Sum(r => r.AmountOverride.GetValueOrDefault(0));
                 decimal thuongTrongNgay = rewards.Where(r => r.Type.Type == RewardPenaltyKind.reward && r.DecidedAt == currentDayOnly).Sum(r => r.AmountOverride.GetValueOrDefault(0));
 
@@ -455,12 +501,13 @@ namespace DeTaiNhanSu.Controllers
         }
 
         // =================================================================
-        //                   API CHỐT LƯƠNG HÀNG LOẠT (FINALIZED)
+        // API CHỐT LƯƠNG HÀNG LOẠT (FINALIZED)
         // =================================================================
         [HttpPost("finalize-batch")]
         public async Task<IActionResult> FinalizeBatchPayroll([FromBody] FinalizeBatchPayrollRequest request)
         {
-            // 1. KIỂM TRA VÀ XÁC THỰC THÁNG/NĂM
+            // ... (Phần này sử dụng CalculateEmployeePayroll nên không cần thay đổi)
+
             if (string.IsNullOrEmpty(request.Month))
                 return CreateErrorResponse(400, "Vui lòng cung cấp Month (YYYY-MM).");
 

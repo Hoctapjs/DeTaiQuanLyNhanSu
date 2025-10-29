@@ -1,6 +1,6 @@
 ﻿using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Models;
-using DeTaiNhanSu.Enums; // Đảm bảo đã import Enums
+using DeTaiNhanSu.Enums;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
@@ -9,34 +9,35 @@ using System.Linq.Dynamic.Core;
 using System.Linq.Dynamic.Core.Exceptions;
 using System.Collections.Generic;
 using System.Threading.Tasks;
+using System.Globalization;
 
 namespace DeTaiNhanSu.Controllers
 {
     // =================================================================
-    //                  DTOs (Data Transfer Objects) - ĐÃ CHỈNH SỬA
+    // DTOs (Data Transfer Objects)
     // =================================================================
     public class CreateRequestSeparatedDto
     {
         public Guid EmployeeId { get; set; }
         public string Title { get; set; } = string.Empty;
         public string Description { get; set; } = string.Empty;
-        public RequestCategory Category { get; set; } // SỬ DỤNG ENUM
+        public RequestCategory Category { get; set; }
 
-        public DateOnly FromDate { get; set; } // SỬ DỤNG DATEONLY
-        public DateOnly? ToDate { get; set; } // SỬ DỤNG DATEONLY?
+        public DateOnly FromDate { get; set; }
+        public DateOnly? ToDate { get; set; }
 
-        public string StartTime { get; set; } = string.Empty; // Giữ string để Parse TimeSpan
+        public string StartTime { get; set; } = string.Empty;
         public string? EndTime { get; set; }
     }
 
     public class ProcessRequestDto
     {
-        public RequestStatus NewStatus { get; set; } // SỬ DỤNG ENUM
+        public RequestStatus NewStatus { get; set; }
         public Guid ApproverUserId { get; set; }
         public decimal ApprovedHours { get; set; }
-        public decimal Rate { get; set; } = 1.5m;
         public string? Reason { get; set; }
     }
+
 
     [ApiController]
     [Route("api/[controller]")]
@@ -57,20 +58,26 @@ namespace DeTaiNhanSu.Controllers
             });
         }
 
+        // PHƯƠNG THỨC HỖ TRỢ ĐỌC GLOBAL SETTINGS (Giả định có)
+        private async Task<decimal> GetGlobalSettingValue(string key, decimal defaultValue)
+        {
+            // Thay thế bằng logic thực tế của bạn để đọc GlobalSettings
+            return await Task.FromResult(defaultValue);
+        }
+
+
         // =================================================================
-        //                  API 1: TẠO YÊU CẦU MỚI (POST) - ĐÃ CHỈNH SỬA
+        // API 1: TẠO YÊU CẦU MỚI (POST)
         // =================================================================
         [HttpPost]
-        public async Task<IActionResult> CreateRequest([FromBody] CreateRequestSeparatedDto newRequest)
+        public async Task<IActionResult> CreateRequest([FromBody] CreateRequestSeparatedDto requestDto)
         {
             // 1. Kiểm tra đầu vào và Logic
-            if (newRequest.EmployeeId == Guid.Empty || newRequest.FromDate == DateOnly.MinValue) // Dùng DateOnly.MinValue
+            if (requestDto.EmployeeId == Guid.Empty || requestDto.FromDate == DateOnly.MinValue)
             {
                 return CreateErrorResponse(400, "Thiếu thông tin bắt buộc (EmployeeId, Category, hoặc FromDate).");
             }
-
-            // Kiểm tra Category chỉ cho phép ot hoặc leave
-            if (newRequest.Category != RequestCategory.ot && newRequest.Category != RequestCategory.leave)
+            if (requestDto.Category != RequestCategory.ot && requestDto.Category != RequestCategory.leave)
             {
                 return CreateErrorResponse(400, $"Loại yêu cầu (Category) không hợp lệ. Chỉ chấp nhận '{RequestCategory.ot}' hoặc '{RequestCategory.leave}'.");
             }
@@ -79,20 +86,20 @@ namespace DeTaiNhanSu.Controllers
             TimeSpan startTimeSpan;
             TimeSpan? endTimeSpan = null;
 
-            if (!TimeSpan.TryParse(newRequest.StartTime, out startTimeSpan))
+            if (!TimeSpan.TryParse(requestDto.StartTime, out startTimeSpan))
             {
                 return CreateErrorResponse(400, "Định dạng StartTime không hợp lệ. Vui lòng nhập giờ theo định dạng HH:mm:ss.");
             }
 
-            if (!string.IsNullOrEmpty(newRequest.EndTime) && TimeSpan.TryParse(newRequest.EndTime, out TimeSpan tempEndTime))
+            if (!string.IsNullOrEmpty(requestDto.EndTime) && TimeSpan.TryParse(requestDto.EndTime, out TimeSpan tempEndTime))
             {
                 endTimeSpan = tempEndTime;
             }
 
             // 3. CHUẨN BỊ VÀ XÁC THỰC NGÀY (SỬ DỤNG DATEONLY)
             DateOnly today = DateOnly.FromDateTime(DateTime.Today);
-            DateOnly vnStartDate = newRequest.FromDate;
-            DateOnly? vnEndDate = newRequest.ToDate;
+            DateOnly vnStartDate = requestDto.FromDate;
+            DateOnly? vnEndDate = requestDto.ToDate;
 
             if (vnStartDate < today)
             {
@@ -104,36 +111,36 @@ namespace DeTaiNhanSu.Controllers
             }
 
             // KIỂM TRA NHÂN VIÊN TỒN TẠI
-            var employeeExists = await _context.Employees.AnyAsync(e => e.Id == newRequest.EmployeeId);
+            var employeeExists = await _context.Employees.AnyAsync(e => e.Id == requestDto.EmployeeId);
             if (!employeeExists)
             {
                 return CreateErrorResponse(404, "Không tìm thấy nhân viên với ID được cung cấp.");
             }
 
-            // Kiểm tra chồng chéo (Dùng DateOnly và Enum RequestStatus)
+            // Kiểm tra chồng chéo
             var isDuplicate = await _context.Requests
-                .AnyAsync(r => r.EmployeeId == newRequest.EmployeeId &&
-                                r.FromDate.HasValue && r.FromDate.Value == vnStartDate &&
-                                r.Status != RequestStatus.rejected); // SỬ DỤNG ENUM
+                .AnyAsync(r => r.EmployeeId == requestDto.EmployeeId &&
+                               r.FromDate.HasValue && r.FromDate.Value == vnStartDate &&
+                               r.Status != RequestStatus.rejected);
 
             if (isDuplicate)
             {
-                return CreateErrorResponse(400, $"Đã có yêu cầu {newRequest.Category} (hoặc yêu cầu khác) tồn tại cho ngày {vnStartDate:dd/MM/yyyy}.");
+                return CreateErrorResponse(400, $"Đã có yêu cầu {requestDto.Category} (hoặc yêu cầu khác) tồn tại cho ngày {vnStartDate:dd/MM/yyyy}.");
             }
 
-            // 4. Tạo bản ghi Request (SỬ DỤNG ENUM, DATEONLY, TIMESPAN)
+            // 4. Tạo bản ghi Request
             var requestModel = new Request
             {
                 Id = Guid.NewGuid(),
-                EmployeeId = newRequest.EmployeeId,
-                Title = newRequest.Title,
-                Description = newRequest.Description,
-                Category = newRequest.Category, // Gán Enum
-                FromDate = vnStartDate,        // Gán DateOnly
-                ToDate = vnEndDate,            // Gán DateOnly?
-                StartTime = startTimeSpan,     // Gán TimeSpan
-                EndTime = endTimeSpan,         // Gán TimeSpan?
-                Status = RequestStatus.pending, // Gán Enum
+                EmployeeId = requestDto.EmployeeId,
+                Title = requestDto.Title,
+                Description = requestDto.Description,
+                Category = requestDto.Category,
+                FromDate = vnStartDate,
+                ToDate = vnEndDate,
+                StartTime = startTimeSpan,
+                EndTime = endTimeSpan,
+                Status = RequestStatus.pending,
                 ApprovedBy = null,
                 CreatedAt = DateTime.Now
             };
@@ -146,9 +153,8 @@ namespace DeTaiNhanSu.Controllers
                 DateOnly startDate = requestModel.FromDate.Value;
                 DateOnly endDate = requestModel.ToDate ?? startDate;
 
-                // Để lặp qua ngày (chúng ta cần một cách an toàn để chuyển DateOnly sang DateTime)
-                DateTime loopStart = startDate.ToDateTime(TimeOnly.MinValue);
-                DateTime loopEnd = endDate.ToDateTime(TimeOnly.MinValue);
+                DateTime loopStart = startDate.ToDateTime(TimeOnly.MinValue).Date;
+                DateTime loopEnd = endDate.ToDateTime(TimeOnly.MinValue).Date;
 
                 for (DateTime date = loopStart; date <= loopEnd; date = date.AddDays(1))
                 {
@@ -156,19 +162,17 @@ namespace DeTaiNhanSu.Controllers
 
                     DateOnly currentDayOnly = DateOnly.FromDateTime(date);
 
-                    // Giả định Attendance Model dùng DateOnly
                     var attendance = await _context.Attendances
                         .FirstOrDefaultAsync(a => a.EmployeeId == requestModel.EmployeeId && a.Date == currentDayOnly);
 
                     if (attendance == null)
                     {
-                        // Giả định Attendance Model dùng Enum AttendanceStatus
                         attendance = new Attendance
                         {
                             Id = Guid.NewGuid(),
                             EmployeeId = requestModel.EmployeeId,
                             Date = currentDayOnly,
-                            Status = AttendanceStatus.absent, // SỬ DỤNG ENUM
+                            Status = AttendanceStatus.absent,
                             Note = $"Vắng mặt do yêu cầu nghỉ phép đang chờ duyệt: {requestModel.Title}"
                         };
                         _context.Attendances.Add(attendance);
@@ -189,18 +193,18 @@ namespace DeTaiNhanSu.Controllers
 
 
         // =================================================================
-        //                  API 2: LẤY DANH SÁCH YÊU CẦU (GET) - ĐÃ CHỈNH SỬA
+        // API 2: LẤY DANH SÁCH YÊU CẦU (GET)
         // =================================================================
+        // ... (API GetRequests giữ nguyên) ...
+
         [HttpGet]
         public async Task<IActionResult> GetRequests(
-           [FromQuery] string? q,
-           [FromQuery] int current = 1,
-           [FromQuery] int pageSize = 20,
-           [FromQuery] string sort = "CreatedAt desc")
+            [FromQuery] string? q,
+            [FromQuery] int current = 1,
+            [FromQuery] int pageSize = 20,
+            [FromQuery] string sort = "CreatedAt desc")
         {
-            var initialQuery = _context.Requests
-                .Include(r => r.Employee)
-                .AsQueryable();
+            var initialQuery = _context.Requests.Include(r => r.Employee).AsQueryable();
 
             IQueryable<Request> query = initialQuery;
 
@@ -211,14 +215,14 @@ namespace DeTaiNhanSu.Controllers
                 return CreateErrorResponse(404, "Hệ thống chưa có bất kỳ bản ghi yêu cầu nào.");
             }
 
-            // 2. Lọc theo chuỗi tìm kiếm 'q' (Dùng Enum.ToString() cho truy vấn an toàn)
+            // 2. Lọc theo chuỗi tìm kiếm 'q'
             if (!string.IsNullOrEmpty(q))
             {
                 query = query.Where(r =>
                     r.Title.Contains(q) ||
                     (r.Description != null && r.Description.Contains(q)) ||
-                    r.Category.ToString().Contains(q) || // SỬ DỤNG ENUM.ToString()
-                    r.Status.ToString().Contains(q) ||  // SỬ DỤNG ENUM.ToString()
+                    r.Category.ToString().Contains(q) ||
+                    r.Status.ToString().Contains(q) ||
                     (r.Employee != null && r.Employee.FullName.Contains(q)) ||
                     (r.Employee != null && r.Employee.Code.Contains(q))
                 );
@@ -228,6 +232,7 @@ namespace DeTaiNhanSu.Controllers
             var totalCount = await query.CountAsync();
             var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
 
+            // LOGIC BẮT LỖI 400 KHI KHÔNG TÌM THẤY KẾT QUẢ VỚI BỘ LỌC 'q'
             bool filtersApplied = !string.IsNullOrEmpty(q);
             if (totalCount == 0 && filtersApplied)
             {
@@ -236,7 +241,6 @@ namespace DeTaiNhanSu.Controllers
             }
 
             string responseMessage = $"Tìm thấy {totalCount} bản ghi yêu cầu.";
-
             List<dynamic> requestList = new List<dynamic>();
 
             // 4. Sắp xếp và phân trang - BỌC TRONG KHỐI TRY-CATCH
@@ -256,15 +260,11 @@ namespace DeTaiNhanSu.Controllers
                             employeeCode = r.Employee != null ? r.Employee.Code : "N/A",
                             title = r.Title,
                             description = r.Description ?? string.Empty,
-                            category = r.Category.ToString(), // Trả về Enum dạng string
-                            status = r.Status.ToString(),     // Trả về Enum dạng string
+                            category = r.Category.ToString(),
+                            status = r.Status.ToString(),
 
-                            // Dùng DateOnly.ToString
-                            date = r.FromDate.HasValue ? r.FromDate.Value.ToString("yyyy-MM-dd") : null,
-                            fromDate = r.FromDate.HasValue ? r.FromDate.Value.ToString("yyyy-MM-dd") : string.Empty,
-                            toDate = r.ToDate.HasValue ? r.ToDate.Value.ToString("yyyy-MM-dd") : string.Empty,
-
-                            // Dùng TimeSpan.ToString
+                            fromDate = r.FromDate.HasValue ? r.FromDate.Value.ToString("yyyy-MM-dd") : null,
+                            toDate = r.ToDate.HasValue ? r.ToDate.Value.ToString("yyyy-MM-dd") : null,
                             startTime = r.StartTime.HasValue ? r.StartTime.Value.ToString(@"hh\:mm\:ss") : string.Empty,
                             endTime = r.EndTime.HasValue ? r.EndTime.Value.ToString(@"hh\:mm\:ss") : string.Empty,
 
@@ -295,13 +295,7 @@ namespace DeTaiNhanSu.Controllers
                 {
                     new
                     {
-                        meta = new
-                        {
-                            current = current,
-                            pageSize = pageSize,
-                            pages = totalPages,
-                            total = totalCount
-                        },
+                        meta = new { current = current, pageSize = pageSize, pages = totalPages, total = totalCount },
                         result = requestList
                     }
                 },
@@ -310,16 +304,15 @@ namespace DeTaiNhanSu.Controllers
         }
 
         // =================================================================
-        //                  API 3: DUYỆT HOẶC TỪ CHỐI - ĐÃ CHỈNH SỬA
+        // API 3: DUYỆT HOẶC TỪ CHỐI
         // =================================================================
         [HttpPut("process/{requestId}")]
         public async Task<IActionResult> ProcessRequest(Guid requestId, [FromBody] ProcessRequestDto request)
         {
-            // 1. Kiểm tra đầu vào (Dùng Enum)
-            if (request.ApproverUserId == Guid.Empty ||
-                (request.NewStatus != RequestStatus.approved && request.NewStatus != RequestStatus.rejected))
+            // 1. Kiểm tra đầu vào
+            if (request.ApproverUserId == Guid.Empty || (request.NewStatus != RequestStatus.approved && request.NewStatus != RequestStatus.rejected))
             {
-                return CreateErrorResponse(400, "Thiếu ID người duyệt hoặc NewStatus không hợp lệ (Chỉ chấp nhận 'approved' hoặc 'rejected').");
+                return CreateErrorResponse(400, "Thiếu ID người duyệt hoặc NewStatus không hợp lệ (Chỉ chấp nhận 'Approved' hoặc 'Rejected').");
             }
 
             // KIỂM TRA APPROVERUSER TỒN TẠI
@@ -337,7 +330,7 @@ namespace DeTaiNhanSu.Controllers
             {
                 return CreateErrorResponse(404, "Không tìm thấy yêu cầu này.");
             }
-            if (currentRequest.Status != RequestStatus.pending) // Dùng Enum
+            if (currentRequest.Status != RequestStatus.pending)
             {
                 return CreateErrorResponse(400, $"Yêu cầu đã ở trạng thái '{currentRequest.Status}'. Không thể xử lý lại.");
             }
@@ -348,7 +341,7 @@ namespace DeTaiNhanSu.Controllers
 
             string finalMessage;
 
-            // 3. XỬ LÝ TỪ CHỐI (REJECTED) (Dùng Enum)
+            // 3. XỬ LÝ TỪ CHỐI (REJECTED)
             if (request.NewStatus == RequestStatus.rejected)
             {
                 currentRequest.Status = RequestStatus.rejected;
@@ -359,15 +352,14 @@ namespace DeTaiNhanSu.Controllers
 
                 finalMessage = $"Đã từ chối yêu cầu {currentRequest.Category} thành công.";
 
-                // CẬP NHẬT ATTENDANCE KHI BỊ TỪ CHỐI (Dùng Enum và DateOnly)
+                // CẬP NHẬT ATTENDANCE KHI BỊ TỪ CHỐI (Leave)
                 if (currentRequest.Category == RequestCategory.leave)
                 {
                     DateOnly startDate = currentRequest.FromDate.Value;
                     DateOnly endDate = currentRequest.ToDate ?? startDate;
 
-                    // Chuyển sang DateTime để lặp (hoặc dùng loop DateOnly)
-                    DateTime loopStart = startDate.ToDateTime(TimeOnly.MinValue);
-                    DateTime loopEnd = endDate.ToDateTime(TimeOnly.MinValue);
+                    DateTime loopStart = startDate.ToDateTime(TimeOnly.MinValue).Date;
+                    DateTime loopEnd = endDate.ToDateTime(TimeOnly.MinValue).Date;
 
                     for (DateTime date = loopStart; date <= loopEnd; date = date.AddDays(1))
                     {
@@ -376,9 +368,7 @@ namespace DeTaiNhanSu.Controllers
                         DateOnly currentDayOnly = DateOnly.FromDateTime(date);
 
                         var attendance = await _context.Attendances
-                            .FirstOrDefaultAsync(a => a.EmployeeId == currentRequest.EmployeeId &&
-                                                        a.Date == currentDayOnly && // Dùng DateOnly
-                                                        a.Status == AttendanceStatus.absent); // Dùng Enum
+                            .FirstOrDefaultAsync(a => a.EmployeeId == currentRequest.EmployeeId && a.Date == currentDayOnly && a.Status == AttendanceStatus.absent);
 
                         if (attendance != null)
                         {
@@ -388,8 +378,8 @@ namespace DeTaiNhanSu.Controllers
                     }
                 }
             }
-            // 4. XỬ LÝ PHÊ DUYỆT (APPROVED) (Dùng Enum)
-            else
+            // 4. XỬ LÝ PHÊ DUYỆT (APPROVED)
+            else // newStatus == RequestStatus.approved
             {
                 currentRequest.Status = RequestStatus.approved;
                 currentRequest.ApprovedBy = request.ApproverUserId;
@@ -406,20 +396,20 @@ namespace DeTaiNhanSu.Controllers
                         return CreateErrorResponse(400, "Yêu cầu OT thiếu ngày hoặc giờ bắt đầu.");
                     }
 
-                    // Tạo bản ghi trong bảng Overtimes (Giả định Overtime Model dùng DateOnly)
-                    // NOTE: Giả định Overtime model có DateOnly Date
+                    decimal finalOtRate = await GetGlobalSettingValue("DEFAULT_OT_RATE", 1.5m);
+
+                    // Tạo bản ghi trong bảng Overtimes
                     var newOvertime = new Overtime
                     {
                         Id = Guid.NewGuid(),
                         EmployeeId = currentRequest.EmployeeId,
-                        Date = currentRequest.FromDate.Value, // Dùng DateOnly
+                        Date = currentRequest.FromDate.Value, // Lưu DateOnly (kiểu DateTime trong C#)
                         Hours = request.ApprovedHours,
-                        Rate = request.Rate,
-                        // Thêm các thuộc tính cần thiết khác cho Overtime
+                        Rate = finalOtRate, // SỬ DỤNG HỆ SỐ TỪ GLOBAL SETTINGS
                         Reason = $"OT từ {currentRequest.StartTime.Value:hh\\:mm\\:ss} | {currentRequest.Title}"
                     };
                     _context.Overtimes.Add(newOvertime);
-                    finalMessage = $"Đã phê duyệt yêu cầu OT thành công. {request.ApprovedHours} giờ đã được thêm vào hệ thống tính lương.";
+                    finalMessage = $"Đã phê duyệt yêu cầu OT thành công. {request.ApprovedHours} giờ đã được thêm vào hệ thống tính lương (Hệ số: {finalOtRate}).";
                 }
                 else if (currentRequest.Category == RequestCategory.leave)
                 {
@@ -428,8 +418,8 @@ namespace DeTaiNhanSu.Controllers
                     DateOnly endDate = currentRequest.ToDate ?? startDate;
                     int daysProcessed = 0;
 
-                    DateTime loopStart = startDate.ToDateTime(TimeOnly.MinValue);
-                    DateTime loopEnd = endDate.ToDateTime(TimeOnly.MinValue);
+                    DateTime loopStart = startDate.ToDateTime(TimeOnly.MinValue).Date;
+                    DateTime loopEnd = endDate.ToDateTime(TimeOnly.MinValue).Date;
 
                     for (DateTime date = loopStart; date <= loopEnd; date = date.AddDays(1))
                     {
@@ -442,17 +432,11 @@ namespace DeTaiNhanSu.Controllers
 
                         if (attendance == null)
                         {
-                            attendance = new Attendance
-                            {
-                                Id = Guid.NewGuid(),
-                                EmployeeId = currentRequest.EmployeeId,
-                                Date = currentDayOnly,
-                                // Thêm các thuộc tính CheckIn/CheckOut nếu cần
-                            };
+                            attendance = new Attendance { Id = Guid.NewGuid(), EmployeeId = currentRequest.EmployeeId, Date = currentDayOnly };
                             _context.Attendances.Add(attendance);
                         }
 
-                        // CHUYỂN BẢN GHI TẠM THỜI (hoặc mới) sang "leave" (Dùng Enum)
+                        // CHUYỂN BẢN GHI TẠM THỜI (hoặc mới) sang "leave"
                         attendance.Status = AttendanceStatus.leave;
                         attendance.Note = $"Nghỉ phép được duyệt: {currentRequest.Title}";
                         daysProcessed++;
@@ -470,9 +454,10 @@ namespace DeTaiNhanSu.Controllers
 
             return Ok(new
             {
-                success = true,
+                statusCode = 200,
                 message = finalMessage,
-                requestId = currentRequest.Id
+                success = true,
+                //requestId = currentRequest.Id
             });
         }
     }

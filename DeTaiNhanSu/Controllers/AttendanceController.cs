@@ -39,16 +39,14 @@ namespace DeTaiNhanSu.Controllers
     {
         private readonly AppDbContext _context;
 
-        public AttendanceController(AppDbContext context)
-        {
-            _context = context;
-        }
+        public AttendanceController(AppDbContext context) => _context = context;
 
         // Phương thức hỗ trợ lấy ngày và giờ hiện tại theo múi giờ Việt Nam
         private (DateOnly Date, TimeOnly Time) GetVnTime()
         {
             var vnTimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
             var vnNow = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, vnTimeZone);
+            // Dùng DateOnly/TimeOnly (yêu cầu .NET 6 trở lên)
             return (DateOnly.FromDateTime(vnNow), TimeOnly.FromDateTime(vnNow));
         }
 
@@ -63,45 +61,66 @@ namespace DeTaiNhanSu.Controllers
             });
         }
 
+        // =================================================================
+        //                 PHƯƠNG THỨC HỖ TRỢ DB/LOGIC
+        // =================================================================
+        private async Task<List<(string WifiName, string Bssid)>> GetAllowedWifisFromDb()
+        {
+            var wifiConfigs = await _context.GlobalSettings
+                .Where(s => s.Key.StartsWith("WIFI_BSSID_"))
+                .ToListAsync();
+
+            return wifiConfigs.Select(w =>
+            {
+                string wifiName = w.Description?.Split(':').Last().Trim() ?? string.Empty;
+                return (WifiName: wifiName, Bssid: w.Value);
+            }).ToList();
+        }
+
+        // Kiểm tra xem ngày đó có nằm trong kỳ nghỉ phép đã được duyệt hay không
+        private async Task<bool> IsDayApprovedForLeave(Guid empId, DateOnly date)
+        {
+            return await _context.Requests
+                .AnyAsync(r => r.EmployeeId == empId
+                            && r.Status == RequestStatus.approved
+                            && r.Category == RequestCategory.leave
+                            && r.FromDate.HasValue && r.FromDate.Value <= date
+                            && r.ToDate.HasValue && r.ToDate.Value >= date);
+        }
+
         // ------------------- CHECK-IN -------------------
         [HttpPost("checkin")]
         public async Task<IActionResult> Checkin([FromBody] CheckinRequest request)
         {
-            if (!Guid.TryParse(request.EmployeeId, out var empId))
-                return CreateErrorResponse(400, "EmployeeId không hợp lệ.");
-
+            if (!Guid.TryParse(request.EmployeeId, out var empId)) return CreateErrorResponse(400, "EmployeeId không hợp lệ.");
             var (today, vnNowTime) = GetVnTime();
 
-            // Mạng WiFi hợp lệ
-            var allowedWifi = new List<(string WifiName, string Bssid)>
+            // 1. KIỂM TRA NGÀY NGHỈ PHÉP ĐÃ DUYỆT TRƯỚC HẾT
+            if (await IsDayApprovedForLeave(empId, today))
             {
-                ("P 304", "68:9e:29:c0:89:ef"),
-                ("AndroidWifi", "00:13:10:85:fe:01"),
-                ("IPOSBACKUP", "A8:2B:CD:50:12:AF")
-            };
-            var isAllowed = allowedWifi.Any(w =>
-                string.Equals(w.WifiName, request.WifiName, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase));
+                return CreateErrorResponse(400, "Bạn đã được duyệt đơn nghỉ phép hôm nay nên không cần checkin.");
+            }
 
-            if (!isAllowed)
-                return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty. Vui lòng kết nối để checkin.");
+            // 2. KIỂM TRA WIFI TỪ DB
+            var allowedWifis = await GetAllowedWifisFromDb();
+            if (!allowedWifis.Any()) return CreateErrorResponse(500, "Lỗi cấu hình: Danh sách WiFi công ty chưa được thiết lập.");
 
-            // Kiểm tra check-in hôm nay (Dùng DateOnly)
+            var isAllowed = allowedWifis.Any(w => string.Equals(w.WifiName, request.WifiName, StringComparison.OrdinalIgnoreCase) && string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase));
+            if (!isAllowed) return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty. Vui lòng kết nối để checkin.");
+
+            // 3. Kiểm tra check-in hôm nay
             var existing = await _context.Attendances
                 .FirstOrDefaultAsync(a => a.EmployeeId == empId && a.Date == today);
 
             if (existing != null)
             {
-                // Nếu đã bị đánh dấu vắng (Dùng Enum)
                 if (existing.Status == AttendanceStatus.absent)
                     return CreateErrorResponse(400, "Hôm nay bạn đã bị đánh dấu vắng mặt. Nếu có lý do chính đáng, vui lòng liên hệ quản lý.");
-
-                // Nếu đã check-in (Dùng TimeOnly?)
                 if (existing.CheckIn != null)
                     return CreateErrorResponse(400, "Bạn đã check-in hôm nay rồi!");
             }
 
-            // Giờ chuẩn (Dùng TimeOnly)
+            // 4. Xử lý Trạng thái
             var start = new TimeOnly(8, 0, 0);
             var lateThreshold = start.Add(TimeSpan.FromMinutes(5));
 
@@ -123,27 +142,17 @@ namespace DeTaiNhanSu.Controllers
             // Cập nhật hoặc thêm mới bản ghi
             if (existing == null)
             {
-                var attendance = new Attendance
-                {
-                    Id = Guid.NewGuid(),
-                    EmployeeId = empId,
-                    Date = today,
-                    CheckIn = vnNowTime,
-                    Status = status,
-                    Note = note
-                };
+                var attendance = new Attendance { Id = Guid.NewGuid(), EmployeeId = empId, Date = today, CheckIn = vnNowTime, Status = status, Note = note };
                 _context.Attendances.Add(attendance);
             }
             else
             {
-                // Cập nhật trạng thái và giờ check-in cho bản ghi đã tồn tại (ví dụ: bị 'leave' tạm thời)
                 existing.CheckIn = vnNowTime;
                 existing.Status = status;
                 existing.Note = note;
             }
 
             await _context.SaveChangesAsync();
-
             return Ok(new { Success = true, Message = $"Check-in thành công. Trạng thái: {status}" });
         }
 
@@ -153,8 +162,7 @@ namespace DeTaiNhanSu.Controllers
         public async Task<IActionResult> Checkout([FromBody] CheckoutRequest request)
         {
             // 1. Khai báo và Kiểm tra cơ bản
-            if (!Guid.TryParse(request.EmployeeId, out var empId))
-                return CreateErrorResponse(400, "EmployeeId không hợp lệ hoặc bị thiếu.");
+            if (!Guid.TryParse(request.EmployeeId, out var empId)) return CreateErrorResponse(400, "EmployeeId không hợp lệ hoặc bị thiếu.");
 
             var (today, vnNowTime) = GetVnTime();
             var endWork = new TimeOnly(17, 0, 0); // Giờ chuẩn: 17:00:00
@@ -162,40 +170,31 @@ namespace DeTaiNhanSu.Controllers
             var attendance = await _context.Attendances
                 .FirstOrDefaultAsync(a => a.EmployeeId == empId && a.Date == today);
 
-            if (attendance == null || attendance.CheckIn == null)
-                return CreateErrorResponse(400, "Bạn chưa check-in hôm nay!");
+            if (attendance == null || attendance.CheckIn == null) return CreateErrorResponse(400, "Bạn chưa check-in hôm nay!");
+            if (attendance.CheckOut != null) return CreateErrorResponse(400, "Bạn đã check-out rồi!");
 
-            if (attendance.CheckOut != null)
-                return CreateErrorResponse(400, "Bạn đã check-out rồi!");
+            // 2. Kiểm tra Wi-Fi TỪ DB
+            var allowedWifis = await GetAllowedWifisFromDb();
+            if (!allowedWifis.Any()) return CreateErrorResponse(500, "Lỗi cấu hình: Danh sách WiFi công ty chưa được thiết lập.");
 
-            // 2. Kiểm tra Wi-Fi
-            var allowedWifi = new List<(string WifiName, string Bssid)>
-            {
-                ("P 304", "68:9e:29:c0:89:ef"), ("AndroidWifi", "00:13:10:85:fe:01"), ("IPOSBACKUP", "A8:2B:CD:50:12:AF")
-            };
-            var isAllowed = allowedWifi.Any(w =>
-                string.Equals(w.WifiName, request.WifiName, StringComparison.OrdinalIgnoreCase) &&
-                string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase));
-
-            if (!isAllowed)
-                return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty. Vui lòng kết nối để checkout");
+            var isAllowed = allowedWifis.Any(w => string.Equals(w.WifiName, request.WifiName, StringComparison.OrdinalIgnoreCase) && string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase));
+            if (!isAllowed) return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty. Vui lòng kết nối để checkout");
 
 
-            // 3. XỬ LÝ VỀ SỚM và OT
-            TimeSpan workDuration = vnNowTime - endWork;
+            // 3. XỬ LÝ VỀ SỚM (Chỉ ghi chú phạt) và OT
+            TimeSpan overTimeDuration = vnNowTime - endWork;
 
-            if (workDuration.TotalMinutes > 5)
+            if (overTimeDuration.TotalMinutes > 5)
             {
                 // Logic OT
-                attendance.Note = (attendance.Note ?? "") + " | Ghi nhận làm thêm giờ.";
             }
             else if (vnNowTime < endWork)
             {
                 // XỬ LÝ VỀ SỚM
-                TimeSpan earlyLeaveDuration = endWork - vnNowTime;
+                var earlyLeaveDuration = endWork - vnNowTime;
                 var minutesEarly = Math.Round(earlyLeaveDuration.TotalMinutes);
 
-                // QUY TẮC PHẠT MỚI: Về sớm hơn 10 phút
+                // QUY TẮC PHẠT: Về sớm hơn 10 phút là PHẠT NẶNG (Trừ 0.5 công)
                 if (earlyLeaveDuration.TotalMinutes > 10)
                 {
                     attendance.Note = (attendance.Note ?? "") + $" | Về sớm {minutesEarly} phút. [PHẠT NẶNG - TRỪ 0.5 CÔNG]";
@@ -221,42 +220,50 @@ namespace DeTaiNhanSu.Controllers
         [HttpPost("mark-absent")]
         public async Task<IActionResult> MarkAbsent()
         {
-            // Tránh chạy vào cuối tuần
-            if (GetVnTime().Date.DayOfWeek == DayOfWeek.Saturday || GetVnTime().Date.DayOfWeek == DayOfWeek.Sunday)
-                return Ok(new { Success = true, Message = "Hệ thống không đánh dấu vắng mặt vào cuối tuần." });
 
             var (today, _) = GetVnTime();
+            var weekendSetting = await _context.GlobalSettings
+                                .AsNoTracking()
+                                .FirstOrDefaultAsync(s => s.Key == "WEEKEND_DAYS");
 
-            // LẤY TẤT CẢ NHÂN VIÊN ĐANG HOẠT ĐỘNG (SỬ DỤNG ENUM CHUẨN)
-            var employees = await _context.Employees
-                .Where(e => e.Status == EmployeeStatus.active) // <--- Đã chỉnh sửa
-                .ToListAsync();
+            // Phân tích các ngày nghỉ (Mặc định: T7, CN nếu không tìm thấy cấu hình)
+            string weekendValue = weekendSetting?.Value ?? "Saturday, Sunday";
+            var weekendDays = weekendValue.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                                          .Select(s => Enum.TryParse(s, true, out DayOfWeek day) ? (DayOfWeek?)day : null)
+                                          .Where(d => d.HasValue)
+                                          .Select(d => d.Value)
+                                          .ToList();
 
+            // Kiểm tra nếu hôm nay là ngày cuối tuần
+            if (weekendDays.Contains(today.DayOfWeek))
+            {
+                return Ok(new { Success = true, Message = "Hệ thống không đánh dấu vắng mặt vào ngày nghỉ cuối tuần (dựa trên cấu hình GlobalSettings)." });
+            }
+            var employees = await _context.Employees.Where(e => e.Status == EmployeeStatus.active).ToListAsync();
             int markedAbsentCount = 0;
 
-            // 2. DUYỆT TỪNG NHÂN VIÊN
             foreach (var emp in employees)
             {
-                // 3. KIỂM TRA HỢP ĐỒNG CÒN HIỆU LỰC
-                bool hasValidContract = await _context.Contracts
-                    .AnyAsync(c => c.EmployeeId == emp.Id && c.Status == ContractStatus.active);
+                // 1. KIỂM TRA HỢP ĐỒNG & NGHỈ PHÉP ĐÃ DUYỆT
+                bool hasValidContract = await _context.Contracts.AnyAsync(c => c.EmployeeId == emp.Id && c.Status == ContractStatus.active);
+                bool isApprovedLeaveDay = await IsDayApprovedForLeave(emp.Id, today);
 
-                if (hasValidContract)
+
+                if (hasValidContract && !isApprovedLeaveDay) // CHỈ ĐÁNH DẤU NẾU LÀ NGÀY LÀM VIỆC BÌNH THƯỜNG
                 {
-                    // 4. Kiểm tra đã có bất kỳ bản ghi chấm công nào chưa (Dùng DateOnly)
-                    bool hasAttendance = await _context.Attendances
-                        .AnyAsync(a => a.EmployeeId == emp.Id && a.Date == today);
+                    // 2. Kiểm tra đã có bất kỳ bản ghi chấm công nào chưa (Không cần kiểm tra Leave ở đây nữa)
+                    bool hasAttendance = await _context.Attendances.AnyAsync(a => a.EmployeeId == emp.Id && a.Date == today);
 
                     if (!hasAttendance)
                     {
-                        // 5. Thêm bản ghi vắng mặt (absent)
+                        // 3. Thêm bản ghi vắng mặt (absent)
                         _context.Attendances.Add(new Attendance
                         {
                             Id = Guid.NewGuid(),
                             EmployeeId = emp.Id,
                             Date = today,
                             Status = AttendanceStatus.absent,
-                            Note = "Nghỉ không phép"
+                            Note = "Nghỉ không phép (Tự động đánh dấu cuối ngày)"
                         });
                         markedAbsentCount++;
                     }
@@ -271,8 +278,6 @@ namespace DeTaiNhanSu.Controllers
                 Message = $"Đã đánh dấu vắng mặt cho {markedAbsentCount} nhân viên chưa check-in và có hợp đồng còn hiệu lực."
             });
         }
-
-
         [HttpGet("status/{employeeId}")]
         public async Task<IActionResult> GetAttendanceStatus(Guid employeeId)
         {
@@ -290,6 +295,17 @@ namespace DeTaiNhanSu.Controllers
                     Message = "Bạn chưa check-in hôm nay."
                 });
             }
+
+            if (attendance.Status == AttendanceStatus.leave)
+            {
+                return Ok(new
+                {
+                    Success = true,
+                    Status = AttendanceStatus.leave.ToString(),
+                    Message = "Bạn đã được duyệt nghỉ phép hôm nay nên không cần checkin."
+                });
+            }
+
 
             if (attendance.Status == AttendanceStatus.absent)
             {

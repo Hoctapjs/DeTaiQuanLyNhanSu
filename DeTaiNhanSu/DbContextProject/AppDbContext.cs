@@ -37,6 +37,8 @@ namespace DeTaiNhanSu.DbContextProject
         public DbSet<Notification> Notifications => Set<Notification>();
         public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
+        public DbSet<GlobalSetting> GlobalSettings => Set<GlobalSetting>();
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -225,6 +227,17 @@ namespace DeTaiNhanSu.DbContextProject
                 al.Property(x => x.Action).HasMaxLength(200).IsRequired();
                 al.HasOne(x => x.User).WithMany().HasForeignKey(x => x.UserId);
                 al.HasIndex(x => x.CreatedAt);
+            });
+
+            // BỔ SUNG: Cấu hình GlobalSettings
+            modelBuilder.Entity<GlobalSetting>(gs =>
+            {
+                // Key được cấu hình là UNIQUE để đảm bảo không có cài đặt trùng lặp
+                gs.HasIndex(x => x.Key)
+                  .IsUnique();
+
+                // Cấu hình độ dài cho Key
+                gs.Property(x => x.Key).HasMaxLength(100).IsRequired();
             });
         }
     }
