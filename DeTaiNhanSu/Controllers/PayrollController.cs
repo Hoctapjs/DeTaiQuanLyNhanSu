@@ -502,99 +502,192 @@ namespace DeTaiNhanSu.Controllers
 
         // =================================================================
         // API GET PERFORMANCE BATCH (Tính lương hàng loạt theo tháng)
+        // ĐÃ TÍCH HỢP TÌM KIẾM, SẮP XẾP, PHÂN TRANG (Đã kiểm tra lại)
         // =================================================================
         [HttpGet("performance-batch")]
-        public async Task<IActionResult> GetPerformanceBatch([FromQuery] string? month)
+        public async Task<IActionResult> GetPerformanceBatch(
+           [FromQuery] string? month,
+           [FromQuery] string? q,             // Tham số tìm kiếm
+           [FromQuery] int current = 1,     // Trang hiện tại
+           [FromQuery] int pageSize = 20,   // Số lượng mỗi trang
+           [FromQuery] string? sort = null,     // Tham số sắp xếp
+           CancellationToken ct = default)
         {
-            // 1. Validate tháng (Giống như GetPerformance)
-            if (string.IsNullOrEmpty(month)) month = DateTime.Now.ToString("yyyy-MM");
-
-            if (!DateTime.TryParseExact($"{month}-01", "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var startDate))
-                return CreateErrorResponse(400, "Định dạng tháng không hợp lệ. Vui lòng sử dụng YYYY-MM.");
-
-            var endDate = startDate.AddMonths(1).AddDays(-1);
-
-            // 2. Lấy danh sách nhân viên đang hoạt động
-            var employeesToRun = await _context.Employees
-                                         .Where(e => e.Status == EmployeeStatus.active)
-                                         .Select(e => new { e.Id, e.FullName }) // Lấy ID và Tên để trả về
-                                         .ToListAsync();
-
-            if (!employeesToRun.Any())
-                return CreateErrorResponse(404, "Không tìm thấy nhân viên nào đang hoạt động.");
-
-            // 3. Lấy Global Settings (BHXH, BHYT, BHTN) MỘT LẦN
-            // Chúng ta lấy các tỷ lệ này bên ngoài vòng lặp để tối ưu hiệu suất
-            decimal bhxh = await GetGlobalSettingValue("EMP_BHXH_RATE", 0.08m);
-            decimal bhyt = await GetGlobalSettingValue("EMP_BHYT_RATE", 0.015m);
-            decimal bhtn = await GetGlobalSettingValue("EMP_BHTN_RATE", 0.01m);
-
-            // 4. Tạo danh sách để chứa kết quả
-            var allResults = new List<object>();
-            string monthOnly = month.Split('-').Last();
-
-            // 5. Lặp qua từng nhân viên và tính toán
-            foreach (var employee in employeesToRun)
+            try
             {
-                // Tái sử dụng hàm tính toán cốt lõi của bạn
-                var calculatedResult = await CalculateEmployeePayroll(employee.Id, startDate, endDate);
+                // 1. Validate tháng và Phân trang
+                if (string.IsNullOrEmpty(month)) month = DateTime.Now.ToString("yyyy-MM");
 
-                // Bỏ qua nếu nhân viên này không có hợp đồng active
-                if (calculatedResult == null) continue;
+                if (!DateTime.TryParseExact($"{month}-01", "yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out var startDate))
+                    return CreateErrorResponse(400, "Định dạng tháng không hợp lệ. Vui lòng sử dụng YYYY-MM.");
 
-                // 6. Định dạng kết quả (Format) giống hệt API GetPerformance
-                var result = new
+                var endDate = startDate.AddMonths(1).AddDays(-1);
+
+                if (current < 1) current = 1;
+                if (pageSize is < 1 or > 200) pageSize = 20;
+
+                string monthOnly = month.Split('-').Last();
+                string baseMessage = $"Bảng lương performance tháng {monthOnly}";
+
+                // 2. Xây dựng Query IQueryable cho Nhân viên có Hợp đồng Active
+                var activeContractEmployeeIds = _context.Contracts
+                    .Where(c => c.Status == ContractStatus.active)
+                    .Select(c => c.EmployeeId);
+
+                var query = _context.Employees
+                    .Where(e => e.Status == EmployeeStatus.active && activeContractEmployeeIds.Contains(e.Id))
+                    .AsNoTracking();
+
+                // Lấy tổng số lượng nhân viên có hợp đồng hợp lệ (Total Ban Đầu)
+                var preFilterTotal = await query.CountAsync(ct);
+
+                if (preFilterTotal == 0)
                 {
-                    // Dữ liệu còn lại có cấu trúc y hệt API GetPerformance
-                    month = monthOnly,
-                    thongTinNhanVien = new
+                    var emptyMeta = new { current, pageSize, pages = 0, total = 0 };
+                    return Ok(new
                     {
-                        employeeId = employee.Id,
-                        fullName = employee.FullName,
-                        contractType = calculatedResult.ContractType.ToString(),
-                        basicSalary = Math.Round(calculatedResult.BasicSalary, 3),
-                        insuranceSalary = Math.Round(calculatedResult.InsuranceSalary, 3)
-                    },
-                    chamCong = new
+                        statusCode = 200,
+                        message = baseMessage + " - Không tìm thấy nhân viên nào có hợp đồng đang hoạt động.",
+                        data = new { meta = emptyMeta, result = new List<object>() },
+                        success = true
+                    });
+                }
+
+                // 3. Áp dụng Tìm kiếm (q)
+                if (!string.IsNullOrWhiteSpace(q))
+                {
+                    string search = q.Trim();
+                    // Lọc theo FullName hoặc Code
+                    query = query.Where(e => e.FullName.Contains(search) || e.Code.Contains(search));
+                }
+
+                // 4. Áp dụng Sắp xếp (sort) và kiểm tra lỗi
+                // Chỉ chấp nhận: "fullName", "-fullName", "code", "-code"
+                string effectiveSort = sort?.Trim() ?? "fullName";
+                string sortError = null;
+
+                switch (effectiveSort.TrimStart('-', '+').ToLower())
+                {
+                    case "fullname":
+                        query = effectiveSort.StartsWith('-')
+                            ? query.OrderByDescending(e => e.FullName).ThenBy(e => e.Id)
+                            : query.OrderBy(e => e.FullName).ThenBy(e => e.Id);
+                        break;
+                    case "code":
+                        query = effectiveSort.StartsWith('-')
+                           ? query.OrderByDescending(e => e.Code).ThenBy(e => e.Id)
+                           : query.OrderBy(e => e.Code).ThenBy(e => e.Id);
+                        break;
+                    default:
+                        // Lỗi: Tên cột sắp xếp không hợp lệ
+                        sortError = $"Không thể sắp xếp theo '{sort}'. Vui lòng sử dụng: 'fullName' (tăng dần) hoặc '-fullName' (giảm dần).";
+                        break;
+                }
+
+                if (sortError != null)
+                {
+                    return CreateErrorResponse(StatusCodes.Status400BadRequest, sortError);
+                }
+
+                // 5. Lấy tổng số lượng SAU KHI lọc (q)
+                var total = await query.CountAsync(ct);
+
+                // Xử lý trường hợp không tìm thấy sau khi Tìm kiếm (q)
+                if (total == 0)
+                {
+                    var emptyMeta = new { current, pageSize, pages = 0, total = 0 };
+                    return Ok(new
                     {
-                        soCongPhanCong = calculatedResult.SoCongPhanCong,
-                        soCongThucTe = Math.Round(calculatedResult.SoCongThucTe, 3),
-                        soLanDiMuon = calculatedResult.SoLanDiMuon,
-                        soLanVang = calculatedResult.SoLanVang,
-                        soLanVeSom = calculatedResult.SoLanVeSom,
-                    },
-                    luong = new
+                        statusCode = 200,
+                        message = baseMessage + $" - Không tìm thấy nhân viên nào phù hợp với từ khóa '{q?.Trim() ?? "..."}'",
+                        data = new { meta = emptyMeta, result = new List<object>() },
+                        success = true
+                    });
+                }
+
+                // 6. Áp dụng Phân trang (Skip/Take)
+                var employeesToRun = await query
+                    .Skip((current - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(e => new { e.Id, e.FullName })
+                    .ToListAsync(ct);
+
+                // 7. Lấy Global Settings (BHXH, BHYT, BHTN) MỘT LẦN
+                decimal bhxh = await GetGlobalSettingValue("EMP_BHXH_RATE", 0.08m);
+                decimal bhyt = await GetGlobalSettingValue("EMP_BHYT_RATE", 0.015m);
+                decimal bhtn = await GetGlobalSettingValue("EMP_BHTN_RATE", 0.01m);
+
+                // 8. Tính toán và Định dạng kết quả
+                var allResults = new List<object>();
+                foreach (var employee in employeesToRun)
+                {
+                    var calculatedResult = await CalculateEmployeePayroll(employee.Id, startDate, endDate);
+
+                    // Giữ nguyên logic bỏ qua nếu không có hợp đồng active
+                    if (calculatedResult == null) continue;
+
+                    var result = new
                     {
-                        tongPhuCap = Math.Round(calculatedResult.TongPhuCap, 3),
-                        tongThuong = Math.Round(calculatedResult.TongThuong, 3),
-                        tongPhat = Math.Round(calculatedResult.TongPhat, 3),
-                        luongMotNgayCong = Math.Round(calculatedResult.LuongMotNgayCong, 3),
-                        luongMotGio = Math.Round(calculatedResult.LuongMotGio, 3),
-                        soGioOT = Math.Round(calculatedResult.TongGioOTDaDangKy, 3),
-                        heSoOT = Math.Round(calculatedResult.HeSoOT, 3),
-                        tongGioOTThucTe = Math.Round(calculatedResult.TongGioOTThucTe, 3),
-                        luongOT = Math.Round(calculatedResult.LuongOT, 3),
-                        bhxh = Math.Round(bhxh, 3), // Sử dụng giá trị đã lấy 1 lần
-                        bhyt = Math.Round(bhyt, 3), // Sử dụng giá trị đã lấy 1 lần
-                        bhtn = Math.Round(bhtn, 3), // Sử dụng giá trị đã lấy 1 lần
-                        baoHiem = Math.Round(calculatedResult.TongBaoHiem, 3),
-                        luongThucNhan = Math.Round(calculatedResult.NetSalary, 3)
-                    }
+                        month = monthOnly,
+                        thongTinNhanVien = new
+                        {
+                            employeeId = employee.Id,
+                            fullName = employee.FullName,
+                            contractType = calculatedResult.ContractType.ToString(),
+                            basicSalary = Math.Round(calculatedResult.BasicSalary, 3),
+                            insuranceSalary = Math.Round(calculatedResult.InsuranceSalary, 3)
+                        },
+                        chamCong = new
+                        {
+                            soCongPhanCong = calculatedResult.SoCongPhanCong,
+                            soCongThucTe = Math.Round(calculatedResult.SoCongThucTe, 3),
+                            soLanDiMuon = calculatedResult.SoLanDiMuon,
+                            soLanVang = calculatedResult.SoLanVang,
+                            soLanVeSom = calculatedResult.SoLanVeSom,
+                        },
+                        luong = new
+                        {
+                            tongPhuCap = Math.Round(calculatedResult.TongPhuCap, 3),
+                            tongThuong = Math.Round(calculatedResult.TongThuong, 3),
+                            tongPhat = Math.Round(calculatedResult.TongPhat, 3),
+                            luongMotNgayCong = Math.Round(calculatedResult.LuongMotNgayCong, 3),
+                            luongMotGio = Math.Round(calculatedResult.LuongMotGio, 3),
+                            soGioOT = Math.Round(calculatedResult.TongGioOTDaDangKy, 3),
+                            heSoOT = Math.Round(calculatedResult.HeSoOT, 3),
+                            tongGioOTThucTe = Math.Round(calculatedResult.TongGioOTThucTe, 3),
+                            luongOT = Math.Round(calculatedResult.LuongOT, 3),
+                            bhxh = Math.Round(bhxh, 3),
+                            bhyt = Math.Round(bhyt, 3),
+                            bhtn = Math.Round(bhtn, 3),
+                            baoHiem = Math.Round(calculatedResult.TongBaoHiem, 3),
+                            luongThucNhan = Math.Round(calculatedResult.NetSalary, 3)
+                        }
+                    };
+
+                    allResults.Add(result);
+                }
+
+                // 9. Tạo đối tượng meta và trả về kết quả
+                var meta = new
+                {
+                    current,
+                    pageSize,
+                    pages = (int)Math.Ceiling(total / (double)pageSize),
+                    total
                 };
 
-                // Thêm kết quả của nhân viên này vào danh sách tổng
-                allResults.Add(result);
+                return Ok(new
+                {
+                    statusCode = 200,
+                    message = baseMessage + $" - Đã tính lương cho {allResults.Count} nhân viên (Tổng: {total}).",
+                    data = new { meta, result = allResults },
+                    success = true
+                });
             }
-
-            // 7. Trả về kết quả theo format chuẩn
-            // (Sử dụng cấu trúc data: [{ result: [...] }] giống như các API khác của bạn)
-            return Ok(new
+            catch (Exception ex)
             {
-                statusCode = 200,
-                message = $"Bảng lương performance tháng {monthOnly} cho {allResults.Count} nhân viên.",
-                data = new[] { new { result = allResults } },
-                success = true
-            });
+                return CreateErrorResponse(500, $"Lỗi máy chủ không xác định khi lấy bảng lương: {ex.Message}");
+            }
         }
         // =================================================================
         // API CHỐT LƯƠNG HÀNG LOẠT (FINALIZED)
