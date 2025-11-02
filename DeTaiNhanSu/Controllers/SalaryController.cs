@@ -37,16 +37,15 @@ namespace DeTaiNhanSu.Controllers
         // =================================================================
         [HttpGet]
         public async Task<IActionResult> GetSalaries(
-            [FromQuery] string? q,
-            [FromQuery] int current = 1,
-            [FromQuery] int pageSize = 20,
-            [FromQuery] string sort = "PayrollRun.Period desc")
+        [FromQuery] string? q,
+        [FromQuery] int current = 1,
+        [FromQuery] int pageSize = 20,
+        [FromQuery] string sort = "PayrollRun.Period desc")
         {
             var initialQuery = _context.Salaries
                 .Include(s => s.Employee)
                 .Include(s => s.PayrollRun)
-                // ĐÃ CHỈNH SỬA: Dùng Enum PayrollRunStatus.processed hoặc .locked
-                // Giả định "finalized" trong code gốc tương đương với processed/locked
+                // Lọc các bản ghi lương đã được chốt (processed hoặc locked)
                 .Where(s => s.PayrollRun.Status == PayrollRunStatus.processed || s.PayrollRun.Status == PayrollRunStatus.locked)
                 .AsQueryable();
 
@@ -54,15 +53,33 @@ namespace DeTaiNhanSu.Controllers
 
             if (!string.IsNullOrEmpty(q))
             {
-                query = query.Where(s =>
-                    (s.Employee != null && s.Employee.FullName.Contains(q)) ||
-                    (s.Employee != null && s.Employee.Code.Contains(q)) ||
-                    s.PayrollRun.Period.Contains(q)
-                );
+                string search = q.Trim();
 
+                // LOGIC SỬA LỖI: Tách Guid.TryParse ra khỏi LINQ
+                if (Guid.TryParse(search, out Guid payrollRunId))
+                {
+                    // Nếu 'q' là một GUID hợp lệ, lọc CHÍNH XÁC theo PayrollRunId
+                    query = query.Where(s => s.PayrollRunId == payrollRunId);
+                }
+                else
+                {
+                    // Nếu không phải GUID, tiếp tục tìm kiếm theo Tên, Mã NV, hoặc Kỳ lương
+                    query = query.Where(s =>
+                        (s.Employee != null && s.Employee.FullName.Contains(search)) ||
+                        (s.Employee != null && s.Employee.Code.Contains(search)) ||
+                        s.PayrollRun.Period.Contains(search)
+                    );
+                }
+
+                // Kiểm tra kết quả sau khi áp dụng bộ lọc
                 if (await initialQuery.AnyAsync() && !await query.AnyAsync())
                 {
-                    return CreateErrorResponse(400, $"Không tìm thấy kết quả nào cho '{q}'. Vui lòng tìm kiếm theo: Tên NV, Mã NV, hoặc Kỳ lương (YYYY-MM).");
+                    // Cải thiện thông báo lỗi cho người dùng biết họ đã tìm kiếm bằng gì
+                    string searchNote = Guid.TryParse(search, out _)
+                        ? $"ID '{search}'"
+                        : $"từ khóa '{search}'";
+
+                    return CreateErrorResponse(400, $"Không tìm thấy kết quả nào cho {searchNote}. Vui lòng tìm kiếm theo: Tên NV, Mã NV, Kỳ lương (YYYY-MM), hoặc ID Kỳ lương.");
                 }
             }
 
@@ -102,6 +119,7 @@ namespace DeTaiNhanSu.Controllers
             }
             catch (Exception)
             {
+                // Xử lý lỗi ngoại lệ chung nếu cần
                 throw;
             }
 
@@ -112,18 +130,18 @@ namespace DeTaiNhanSu.Controllers
                 message = $"Tìm thấy {totalCount} bản ghi lương đã chốt.",
                 data = new[]
                 {
-                    new
-                    {
-                        meta = new
-                        {
-                            current = current,
-                            pageSize = pageSize,
-                            pages = totalPages,
-                            total = totalCount
-                        },
-                        result = salaryList
-                    }
+            new
+            {
+                meta = new
+                {
+                    current = current,
+                    pageSize = pageSize,
+                    pages = totalPages,
+                    total = totalCount
                 },
+                result = salaryList
+            }
+        },
                 success = true
             });
         }

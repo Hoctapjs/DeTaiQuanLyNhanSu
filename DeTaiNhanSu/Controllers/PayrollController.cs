@@ -64,6 +64,112 @@ namespace DeTaiNhanSu.Controllers
                 message = message
             });
         }
+        // =================================================================
+        // Lấy danh sách tất cả các kỳ chạy lương (PayrollRun)
+        // GET /api/Salary/payrollruns
+        // =================================================================
+        [HttpGet("payrollruns")]
+        public async Task<IActionResult> GetPayrollRuns(
+            [FromQuery] string? q,
+            [FromQuery] int current = 1,
+            [FromQuery] int pageSize = 20,
+            [FromQuery] string sort = "Period desc") // Mặc định sắp xếp theo kỳ giảm dần
+        {
+            var initialQuery = _context.PayrollRuns
+                .AsNoTracking()
+                .AsQueryable();
+
+            IQueryable<PayrollRun> query = initialQuery;
+
+            // 1. Áp dụng Tìm kiếm (q)
+            if (!string.IsNullOrEmpty(q))
+            {
+                // Lọc theo Period (YYYY-MM) hoặc Status
+                string search = q.Trim();
+                query = query.Where(pr => pr.Period.Contains(search));
+
+                if (Enum.TryParse(search, true, out PayrollRunStatus statusEnum))
+                {
+                    query = query.Where(pr => pr.Status == statusEnum);
+                }
+
+                // Kiểm tra xem có kết quả nào sau khi lọc không
+                if (await initialQuery.AnyAsync() && !await query.AnyAsync())
+                {
+                    return CreateErrorResponse(400, $"Không tìm thấy kết quả nào cho '{q}'. Vui lòng tìm kiếm theo: Kỳ lương (YYYY-MM) hoặc Trạng thái.");
+                }
+            }
+
+            // 2. Tính tổng số lượng
+            var totalCount = await query.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+            // Xử lý trường hợp không có dữ liệu
+            if (totalCount == 0)
+            {
+                var emptyMeta = new { current, pageSize, pages = 0, total = 0 };
+                return Ok(new
+                {
+                    statusCode = 200,
+                    message = "Không tìm thấy kỳ lương nào.",
+                    data = new[] { new { meta = emptyMeta, result = new List<object>() } },
+                    success = true
+                });
+            }
+
+            List<dynamic> payrollRunList = new List<dynamic>();
+
+            // 3. Sắp xếp và phân trang
+            try
+            {
+                var tempPayrollRunList = await query
+                    .OrderBy(sort)
+                    .Skip((current - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(pr => new
+                    {
+                        id = pr.Id,
+                        period = pr.Period,
+                        status = pr.Status.ToString(), // Chuyển Enum sang string
+
+                    })
+                    .ToListAsync();
+
+                payrollRunList.AddRange(tempPayrollRunList.Cast<dynamic>());
+
+            }
+            catch (ParseException)
+            {
+                string supportedFields = "Hỗ trợ sắp xếp theo: Period, Status, CreatedAt. (Thêm ' asc' hoặc ' desc')";
+                return CreateErrorResponse(400, $"Lỗi sắp xếp: Tên cột '{sort}' không hợp lệ. {supportedFields}");
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+
+            // 4. Trả về Response
+            return Ok(new
+            {
+                statusCode = 200,
+                message = $"Tìm thấy {totalCount} kỳ lương.",
+                data = new[]
+                {
+            new
+            {
+                meta = new
+                {
+                    current = current,
+                    pageSize = pageSize,
+                    pages = totalPages,
+                    total = totalCount
+                },
+                result = payrollRunList
+            }
+        },
+                success = true
+            });
+        }
 
         // =================================================================
         // PHƯƠNG THỨC HỖ TRỢ ĐỌC GLOBAL SETTINGS
