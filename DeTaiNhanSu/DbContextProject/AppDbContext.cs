@@ -1,8 +1,8 @@
-﻿using DeTaiNhanSu.Enums;
+﻿using DeTaiNhanSu.Dtos.Notification;
+using DeTaiNhanSu.Enums;
 using DeTaiNhanSu.Models;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
-
 
 namespace DeTaiNhanSu.DbContextProject
 {
@@ -10,7 +10,6 @@ namespace DeTaiNhanSu.DbContextProject
     {
         public AppDbContext(DbContextOptions<AppDbContext> options) : base(options)
         {
-
         }
 
         public DbSet<Employee> Employees => Set<Employee>();
@@ -36,8 +35,12 @@ namespace DeTaiNhanSu.DbContextProject
         public DbSet<TrainingRecord> TrainingRecords => Set<TrainingRecord>();
         public DbSet<Notification> Notifications => Set<Notification>();
         public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
-
         public DbSet<GlobalSetting> GlobalSettings => Set<GlobalSetting>();
+        public DbSet<DeviceStatus> DeviceStatuses { get; set; }
+        public DbSet<FcmToken> FcmTokens { get; set; }
+
+        // BẢNG MỚI ĐÃ ĐƯỢC THÊM VÀO
+        public DbSet<UserNotification> UserNotifications { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
@@ -47,18 +50,18 @@ namespace DeTaiNhanSu.DbContextProject
             static ValueConverter<TEnum, string> LowerString<TEnum>()
             where TEnum : struct, Enum
             => new ValueConverter<TEnum, string>(
-                v => v.ToString().ToLowerInvariant(),     // ghi xuống DB: "reward", "penalty", ...
+                v => v.ToString().ToLowerInvariant(),   // ghi xuống DB: "reward", "penalty", ...
                 s => (TEnum)Enum.Parse(typeof(TEnum), s, true) // đọc lên, ignoreCase = true
             );
 
             modelBuilder.Entity<RewardPenaltyType>(b =>
             {
                 b.Property(x => x.Type).HasConversion(LowerString<RewardPenaltyKind>())
-                                       .HasMaxLength(32);
-                b.Property(x => x.Level).HasConversion(LowerString<SeverityLevel>())
                                         .HasMaxLength(32);
+                b.Property(x => x.Level).HasConversion(LowerString<SeverityLevel>())
+                                         .HasMaxLength(32);
                 b.Property(x => x.Form).HasConversion(LowerString<ActionForm>())
-                                       .HasMaxLength(32);
+                                        .HasMaxLength(32);
             });
 
             // common
@@ -66,6 +69,8 @@ namespace DeTaiNhanSu.DbContextProject
             {
                 prop.SetProviderClrType(typeof(string));
             }
+
+            // ... (tất cả các cấu hình khác của bạn: contract, employee, department... giữ nguyên) ...
 
             // contract number
             modelBuilder.Entity<Contract>()
@@ -133,7 +138,7 @@ namespace DeTaiNhanSu.DbContextProject
             modelBuilder.Entity<WorkSchedule>(ws =>
             {
                 ws.HasOne(x => x.Employee).WithMany()
-                  .HasForeignKey(x => x.EmployeeId);
+                    .HasForeignKey(x => x.EmployeeId);
                 ws.HasIndex(x => new { x.EmployeeId, x.Date }).HasDatabaseName("IX_WorkSchedules_Employee_Date");
             });
 
@@ -152,7 +157,7 @@ namespace DeTaiNhanSu.DbContextProject
                 c.HasIndex(x => x.ContractNumber).IsUnique();
                 c.HasOne(x => x.Employee).WithMany().HasForeignKey(x => x.EmployeeId);
                 c.HasOne(x => x.Representative).WithMany().HasForeignKey(x => x.RepresentativeId)
-                 .OnDelete(DeleteBehavior.Restrict);
+                    .OnDelete(DeleteBehavior.Restrict);
             });
 
             modelBuilder.Entity<Overtime>(o =>
@@ -179,7 +184,7 @@ namespace DeTaiNhanSu.DbContextProject
             {
                 p.Property(x => x.Category).HasMaxLength(50).IsRequired();
                 p.HasOne(x => x.CreatedByUser).WithMany().HasForeignKey(x => x.CreatedBy)
-                 .OnDelete(DeleteBehavior.Restrict);
+                    .OnDelete(DeleteBehavior.Restrict);
             });
 
             modelBuilder.Entity<InsuranceProfile>(i =>
@@ -217,9 +222,40 @@ namespace DeTaiNhanSu.DbContextProject
                 tr.HasIndex(x => new { x.EmployeeId, x.CourseId }).IsUnique();
             });
 
-            modelBuilder.Entity<Notification>(n =>
+            // KHỐI CŨ ĐÃ BỊ XÓA VÀ THAY BẰNG 2 KHỐI MỚI NÀY
+            // 1. CẤU HÌNH BẢNG NOTIFICATION (Bảng nội dung)
+            modelBuilder.Entity<Notification>(entity =>
             {
-                n.HasOne(x => x.User).WithMany(u => u.Notifications).HasForeignKey(x => x.UserId);
+                // Cài đặt giá trị mặc định (DEFAULT) cho trường CreatedAt
+                // (Lấy giờ VN = UTC + 7 tiếng)
+                entity.Property(n => n.CreatedAt)
+                      .HasDefaultValueSql("DATEADD(hour, 7, SYSUTCDATETIME())");
+
+                // Cấu hình quan hệ Người GÂY RA HÀNH ĐỘNG (ActorId)
+                entity.HasOne(n => n.Actor)
+                      .WithMany() // User không có collection ngược lại cho 'Actor'
+                      .HasForeignKey(n => n.ActorId)
+                      .IsRequired(false) // Cho phép ActorId là NULL
+                      .OnDelete(DeleteBehavior.Restrict); // Không cho xóa User nếu đang là Actor
+            });
+
+            // 2. CẤU HÌNH BẢNG USERNOTIFICATION (Bảng nối)
+            modelBuilder.Entity<UserNotification>(entity =>
+            {
+                // Cài đặt Khóa Chính Kép (Composite Primary Key)
+                entity.HasKey(un => new { un.NotificationId, un.UserId });
+
+                // Cấu hình quan hệ với Notification
+                entity.HasOne(un => un.Notification)
+                      .WithMany(n => n.UserNotifications) // Trỏ tới collection trong Notification.cs
+                      .HasForeignKey(un => un.NotificationId)
+                      .OnDelete(DeleteBehavior.Cascade); // Nếu xóa Nội dung thông báo -> xóa luôn trạng thái
+
+                // Cấu hình quan hệ với User
+                entity.HasOne(un => un.User)
+                      .WithMany(u => u.UserNotifications) // Trỏ tới collection trong User.cs
+                      .HasForeignKey(un => un.UserId)
+                      .OnDelete(DeleteBehavior.Cascade); // Nếu xóa User -> xóa luôn trạng thái
             });
 
             modelBuilder.Entity<AuditLog>(al =>
@@ -234,7 +270,7 @@ namespace DeTaiNhanSu.DbContextProject
             {
                 // Key được cấu hình là UNIQUE để đảm bảo không có cài đặt trùng lặp
                 gs.HasIndex(x => x.Key)
-                  .IsUnique();
+                    .IsUnique();
 
                 // Cấu hình độ dài cho Key
                 gs.Property(x => x.Key).HasMaxLength(100).IsRequired();

@@ -1,0 +1,448 @@
+﻿using DeTaiNhanSu.DbContextProject;
+using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services.Notification;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
+using System.Linq.Dynamic.Core; // <--- THÊM USING NÀY
+using System.Linq.Dynamic.Core.Exceptions;
+using NotificationModel = DeTaiNhanSu.Models.Notification; // Add this alias to resolve ambiguity
+
+namespace DeTaiNhanSu.Controllers
+{
+    [ApiController]
+    [Route("api/[controller]")]
+    public class Notifications : ControllerBase
+    {
+        private readonly INotificationService _notificationService;
+        private readonly AppDbContext _context; // Đã inject _context
+
+        // Helper method để lấy thời gian Việt Nam
+        private static DateTime GetVietnamTime()
+        {
+            var vietnamTimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
+            return TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, vietnamTimeZone);
+        }
+
+        public Notifications(INotificationService notificationService, AppDbContext context)
+        {
+            _notificationService = notificationService;
+            _context = context;
+        }
+
+        // =================================================================
+        // PHẦN SỬA LỖI [HttpGet("list")]
+        // =================================================================
+        [HttpGet("list")]
+        public async Task<IActionResult> GetNotifications(
+              [FromQuery] string? q,
+              [FromQuery] int current = 1,
+              [FromQuery] int pageSize = 20,
+              [FromQuery] string sort = "Id desc")
+        {
+            var initialQuery = _context.UserNotifications
+                .Include(un => un.Notification)
+                    .ThenInclude(n => n.Actor)
+                        .ThenInclude(a => a.Employee)
+                .Include(un => un.User)
+                    .ThenInclude(u => u.Employee)
+                .AsQueryable();
+
+            IQueryable<UserNotification> query = initialQuery;
+
+            if (!string.IsNullOrEmpty(q))
+            {
+                string searchTrimmed = q.Trim();
+                string searchLower = searchTrimmed.ToLower();
+
+                // Cố gắng parse 'q' thành GUID
+                bool isGuid = Guid.TryParse(searchTrimmed, out Guid searchGuid);
+
+                // === BẮT ĐẦU SỬA LOGIC TÌM KIẾM ===
+                query = query.Where(un =>
+                    // 1. Nếu 'q' LÀ một GUID, kiểm tra khớp chính xác với NotificationId HOẶC UserId
+                    (isGuid && (un.NotificationId == searchGuid || un.UserId == searchGuid)) ||
+
+                    // 2. Kiểm tra các trường văn bản
+                    un.Notification.Title.ToLower().Contains(searchLower) ||
+                    un.Notification.Content.ToLower().Contains(searchLower) ||
+                    un.Notification.Type.ToLower().Contains(searchLower) ||
+                    (un.User != null && un.User.Employee != null && un.User.Employee.FullName.ToLower().Contains(searchLower)) ||
+
+                    // 3. (MỚI) Tìm kiếm 'q' (dạng text) bên trong chuỗi UserId
+                    un.UserId.ToString().Contains(searchLower)
+                );
+                // === KẾT THÚC SỬA LOGIC TÌM KIẾM ===
+
+                if (await initialQuery.AnyAsync() && !await query.AnyAsync())
+                {
+                    string searchNote = Guid.TryParse(searchTrimmed, out _) ? $"ID '{searchTrimmed}'" : $"từ khóa '{searchTrimmed}'";
+                    return BadRequest(new
+                    {
+                        statusCode = 400,
+                        message = $"Không tìm thấy kết quả nào cho {searchNote}. Vui lòng tìm kiếm theo: ID, UserID, Tiêu đề, Nội dung, Loại, hoặc Tên người nhận.",
+                        success = false
+                    });
+                }
+            }
+
+            var totalCount = await query.CountAsync();
+            var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+            List<dynamic> notificationList = new List<dynamic>();
+
+            try
+            {
+                // SỬA: Xử lý sort cho UserNotifications
+                string sortQuery = sort;
+                if (sortQuery.Contains("userName", StringComparison.OrdinalIgnoreCase))
+                {
+                    sortQuery = sortQuery.Replace("userName", "User.Employee.FullName", StringComparison.OrdinalIgnoreCase);
+                }
+                if (sortQuery.Contains("Id", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Ưu tiên sắp xếp theo thời gian tạo (CreatedAt) của thông báo
+                    sortQuery = sortQuery.Replace("Id", "Notification.CreatedAt", StringComparison.OrdinalIgnoreCase);
+                }
+                // Nếu 'sort' mặc định là "Id desc", nó sẽ trở thành "Notification.CreatedAt desc"
+
+                var tempList = await query
+                    .OrderBy(sortQuery) // Sử dụng logic sort đã sửa
+                    .Skip((current - 1) * pageSize)
+                    .Take(pageSize)
+                    .Select(un => new
+                    {
+                        id = un.NotificationId,
+                        userId = un.UserId,
+                        userName = (un.User != null && un.User.Employee != null) ? un.User.Employee.FullName : "N/A",
+                        type = un.Notification.Type,
+                        title = un.Notification.Title,
+                        content = un.Notification.Content,
+                        readAt = un.ReadAt, // Từ UserNotification
+                        createdAt = un.Notification.CreatedAt, // Từ Notification
+                        actorId = un.Notification.ActorId,
+                        actorName = (un.Notification.Actor != null && un.Notification.Actor.Employee != null)
+                            ? un.Notification.Actor.Employee.FullName
+                            : (un.Notification.ActorId == null ? "System" : "Unknown"),
+                        actionUrl = un.Notification.ActionUrl
+                    })
+                    .ToListAsync();
+
+                notificationList.AddRange(tempList.Cast<dynamic>());
+            }
+            catch (ParseException ex)
+            {
+                string supportedFields = "Hỗ trợ sắp xếp theo: CreatedAt (hoặc Id), Title, Type, userName, ReadAt. (Thêm ' asc' hoặc ' desc')";
+                return BadRequest(new
+                {
+                    statusCode = 400,
+                    message = $"Lỗi sắp xếp: Tên cột '{sort}' không hợp lệ. {supportedFields}",
+                    success = false
+                });
+            }
+            catch (Exception)
+            {
+                throw;
+            }
+
+            return Ok(new
+            {
+                statusCode = 200,
+                message = $"Tìm thấy {totalCount} thông báo.",
+                data = new[]
+                {
+                    new
+                    {
+                        meta = new
+                        {
+                            current = current,
+                            pageSize = pageSize,
+                            pages = totalPages,
+                            total = totalCount
+                        },
+                        result = notificationList
+                    }
+                },
+                success = true
+            });
+        }
+
+        [HttpPut("mark-as-read/{notificationId}")]
+        public async Task<IActionResult> MarkAsRead(Guid notificationId, [FromQuery] Guid userId)
+        {
+            try
+            {
+                var userNotification = await _context.UserNotifications
+                    .FirstOrDefaultAsync(un => un.NotificationId == notificationId && un.UserId == userId);
+
+                if (userNotification == null)
+                {
+                    return NotFound(new { Success = false, Message = "Notification not found for this user" });
+                }
+
+                userNotification.ReadAt = GetVietnamTime(); // Sử dụng thời gian Việt Nam
+                await _context.SaveChangesAsync();
+
+                return Ok(new { Success = true, Message = "Notification marked as read" });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new { Success = false, Message = $"Error: {ex.Message}" });
+            }
+        }
+
+        // =================================================================
+        // CÁC PHẦN CÒN LẠI CỦA CONTROLLER (GIỮ NGUYÊN)
+        // =================================================================
+
+        // Endpoint để tạo thông báo HR tùy chỉnh
+        [HttpPost("create-hr")]
+        public async Task<IActionResult> CreateHRNotification([FromBody] CreateNotificationRequest request)
+        {
+            try
+            {
+                // Kiểm tra dữ liệu đầu vào trước khi tạo notification
+                if (string.IsNullOrWhiteSpace(request.Title))
+                {
+                    return BadRequest(new
+                    {
+                        Success = false,
+                        Message = "Title is required"
+                    });
+                }
+
+                if (string.IsNullOrWhiteSpace(request.Content))
+                {
+                    return BadRequest(new
+                    {
+                        Success = false,
+                        Message = "Content is required"
+                    });
+                }
+
+                // Kiểm tra ActorId có tồn tại trong database không (nếu được cung cấp)
+                if (request.ActorId.HasValue)
+                {
+                    var actorExists = await _context.Users.AnyAsync(u => u.Id == request.ActorId.Value);
+                    if (!actorExists)
+                    {
+                        return BadRequest(new
+                        {
+                            Success = false,
+                            Message = $"Actor with ID {request.ActorId.Value} does not exist"
+                        });
+                    }
+                }
+
+                // Kiểm tra TargetUserIds có tồn tại trong database không (nếu được cung cấp)
+                if (request.TargetUserIds != null && request.TargetUserIds.Any())
+                {
+                    var existingUserIds = await _context.Users
+                        .Where(u => request.TargetUserIds.Contains(u.Id))
+                        .Select(u => u.Id)
+                        .ToListAsync();
+
+                    var nonExistentUserIds = request.TargetUserIds.Except(existingUserIds).ToList();
+                    if (nonExistentUserIds.Any())
+                    {
+                        return BadRequest(new
+                        {
+                            Success = false,
+                            Message = $"The following user IDs do not exist: {string.Join(", ", nonExistentUserIds)}"
+                        });
+                    }
+                }
+
+                var notification = new NotificationModel
+                {
+                    Id = Guid.NewGuid(),
+                    Type = request.Type ?? "general",
+                    Title = request.Title,
+                    Content = request.Content,
+                    CreatedAt = GetVietnamTime(), // Sử dụng thời gian Việt Nam
+                    ActorId = request.ActorId,
+                    ActionUrl = request.ActionUrl
+                };
+
+                await _notificationService.SendHRNotificationAsync(notification, request.TargetUserIds);
+
+                return Ok(new
+                {
+                    Success = true,
+                    Message = "Notification created successfully",
+                    NotificationId = notification.Id
+                });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                // Log chi tiết lỗi database
+                var innerMessage = dbEx.InnerException?.Message ?? "No inner exception";
+                var fullMessage = $"Database error: {dbEx.Message}. Inner: {innerMessage}";
+
+                return BadRequest(new
+                {
+                    Success = false,
+                    Message = fullMessage,
+                    Details = new
+                    {
+                        Exception = dbEx.GetType().Name,
+                        InnerException = dbEx.InnerException?.GetType().Name,
+                        StackTrace = dbEx.StackTrace
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                // Log chi tiết lỗi chung
+                var innerMessage = ex.InnerException?.Message ?? "No inner exception";
+                var fullMessage = $"Error creating notification: {ex.Message}. Inner: {innerMessage}";
+
+                return BadRequest(new
+                {
+                    Success = false,
+                    Message = fullMessage,
+                    Details = new
+                    {
+                        Exception = ex.GetType().Name,
+                        InnerException = ex.InnerException?.GetType().Name,
+                        StackTrace = ex.StackTrace
+                    }
+                });
+            }
+        }
+
+        // Endpoint đơn giản để tạo thông báo lương
+        [HttpPost("create-payroll")]
+        public async Task<IActionResult> CreatePayrollNotification([FromBody] SimpleNotificationRequest request)
+        {
+            try
+            {
+                await _notificationService.SendPayrollNotificationAsync(
+                    request.Title,
+                    request.Content,
+                    request.TargetUserIds
+                );
+
+                return Ok(new
+                {
+                    Success = true,
+                    Message = "Payroll notification sent successfully"
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    Success = false,
+                    Message = $"Error sending payroll notification: {ex.Message}"
+                });
+            }
+        }
+
+        // Endpoint để tạo thông báo chấm công
+        [HttpPost("create-attendance")]
+        public async Task<IActionResult> CreateAttendanceNotification([FromBody] SimpleNotificationRequest request)
+        {
+            try
+            {
+                await _notificationService.SendAttendanceNotificationAsync(
+                    request.Title,
+                    request.Content,
+                    request.TargetUserIds
+                );
+
+                return Ok(new
+                {
+                    Success = true,
+                    Message = "Attendance notification sent successfully"
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    Success = false,
+                    Message = $"Error sending attendance notification: {ex.Message}"
+                });
+            }
+        }
+
+        // Endpoint để tạo thông báo nghỉ phép
+        [HttpPost("create-leave-request")]
+        public async Task<IActionResult> CreateLeaveRequestNotification([FromBody] SimpleNotificationRequest request)
+        {
+            try
+            {
+                await _notificationService.SendLeaveRequestNotificationAsync(
+                    request.Title,
+                    request.Content,
+                    request.TargetUserIds
+                );
+
+                return Ok(new
+                {
+                    Success = true,
+                    Message = "Leave request notification sent successfully"
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    Success = false,
+                    Message = $"Error sending leave request notification: {ex.Message}"
+                });
+            }
+        }
+
+        // Endpoint demo để test nhanh - chỉ cần bấm vào
+        [HttpGet("test-notification")]
+        public async Task<IActionResult> TestNotification()
+        {
+            try
+            {
+                await _notificationService.SendHRNotificationAsync(new NotificationModel
+                {
+                    Id = Guid.NewGuid(),
+                    Type = "test",
+                    Title = "Test Notification",
+                    Content = "This is a test notification created from the endpoint!",
+                    CreatedAt = GetVietnamTime(), // Sử dụng thời gian Việt Nam
+                    ActorId = Guid.Parse("95149717-529B-499C-82D2-1CC47D0B01C9"),
+                    ActionUrl = null // Hoặc có thể gán URL test
+                });
+
+                return Ok(new
+                {
+                    Success = true,
+                    Message = "Test notification sent successfully!"
+                });
+            }
+            catch (Exception ex)
+            {
+                return BadRequest(new
+                {
+                    Success = false,
+                    Message = $"Error sending test notification: {ex.Message}"
+                });
+            }
+        }
+    }
+
+    // DTO classes for request data
+    public class CreateNotificationRequest
+    {
+        public string? Type { get; set; }
+        public string Title { get; set; } = default!;
+        public string Content { get; set; } = default!;
+        public Guid? ActorId { get; set; }
+        public string? ActionUrl { get; set; } // Đổi thành nullable để tùy chọn
+        public List<Guid>? TargetUserIds { get; set; }
+    }
+
+    public class SimpleNotificationRequest
+    {
+        public string Title { get; set; } = default!;
+        public string Content { get; set; } = default!;
+        public List<Guid>? TargetUserIds { get; set; }
+    }
+}

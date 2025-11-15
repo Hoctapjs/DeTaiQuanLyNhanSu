@@ -29,7 +29,7 @@ namespace DeTaiNhanSu.Models
         // các bảng tham chiếu
         public Employee Employee { get; set; } = default!;
         public Role Role { get; set; } = default!;
-        public ICollection<Notification> Notifications { get; set; } = [];
-
+        // Một User có nhiều "trạng thái thông báo"
+        public ICollection<UserNotification> UserNotifications { get; set; } = new List<UserNotification>();
     }
 }
