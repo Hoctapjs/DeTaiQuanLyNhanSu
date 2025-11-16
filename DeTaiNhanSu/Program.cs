@@ -5,7 +5,11 @@ using DeTaiNhanSu.Models;
 using DeTaiNhanSu.Services.Auth;
 using DeTaiNhanSu.Services.ContractMaintenance;
 using DeTaiNhanSu.Services.Email;
+using DeTaiNhanSu.Services.Hubs; // Add this using statement for SignalR Hub
 using DeTaiNhanSu.Services.Log;
+using DeTaiNhanSu.Services.Notification; // Add this using statement
+using FirebaseAdmin;
+using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
@@ -34,6 +38,9 @@ builder.Services.AddControllers(o =>
     o.Filters.Add<AuditActionFilter>(); // global audit filter
 });
 
+// ==== SignalR ====
+builder.Services.AddSignalR();
+
 // ==== DbContext + Interceptor ====
 builder.Services.AddDbContext<AppDbContext>((sp, opt) =>
 {
@@ -45,10 +52,31 @@ builder.Services.AddDbContext<AppDbContext>((sp, opt) =>
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
 builder.Services.AddScoped<IEmailSender, MailKitEmailSender>();
 
+// ==== Notification Services ====
+builder.Services.AddScoped<IFirebaseMessagingService, FirebaseMessagingService>();
+builder.Services.AddScoped<IDeviceStatusService, DeviceStatusService>();
+builder.Services.AddScoped<INotificationService, NotificationService>();
+
 // ==== Auth services ====
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 
+// ==== Firebase config ====
+if (FirebaseApp.DefaultInstance == null)
+{
+    var jsonPath = Path.Combine(AppContext.BaseDirectory, "plexiform-muse-461800-t5-firebase-adminsdk-fbsvc-c4311f1d67.json");
+    var credential = GoogleCredential.FromFile(jsonPath);
+    var json = File.ReadAllText(jsonPath);
+    var projectId = System.Text.Json.JsonDocument.Parse(json).RootElement.GetProperty("project_id").GetString();
+
+    Console.WriteLine(" Project ID từ JSON: " + projectId);
+
+    FirebaseApp.Create(new AppOptions
+    {
+        Credential = credential,
+        ProjectId = "plexiform-muse-461800-t5"
+    });
+}
 // ==== JWT Auth ====
 var jwt = builder.Configuration.GetSection("Jwt");
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!));
@@ -218,6 +246,6 @@ app.MapGet("/", () => Results.Redirect("/swagger"));
 
 app.MapControllers();
 
-app.MapHub<NotificationNewHub>("/notificationHub");
-
+app.MapHub<NotificationNewHub>("/notificationHubTable");
+app.MapHub<PublicNotificationHub>("/notificationHub");
 app.Run();

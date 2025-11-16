@@ -4,6 +4,7 @@ using DeTaiNhanSu.DbContextProject;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace DeTaiNhanSu.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251112152846_them bang usernotification")]
+    partial class thembangusernotification
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -220,105 +223,19 @@ namespace DeTaiNhanSu.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<string>("ClassCode")
-                        .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
-
-                    b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime2")
-                        .HasDefaultValueSql("SYSUTCDATETIME()");
+                    b.Property<int?>("Hours")
+                        .HasColumnType("int");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
-                    b.Property<int>("PassThreshold")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasDefaultValue(70);
+                    b.Property<string>("Provider")
+                        .HasColumnType("nvarchar(max)");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ClassCode")
-                        .IsUnique()
-                        .HasFilter("[ClassCode] IS NOT NULL AND [ClassCode] <> ''");
 
                     b.ToTable("Courses");
-                });
-
-            modelBuilder.Entity("DeTaiNhanSu.Models.CourseQuestion", b =>
-                {
-                    b.Property<Guid>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("A")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("B")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("C")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Content")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<string>("Correct")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.Property<Guid>("CourseId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<string>("D")
-                        .IsRequired()
-                        .HasColumnType("nvarchar(max)");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CourseId");
-
-                    b.ToTable("CourseQuestions");
-                });
-
-            modelBuilder.Entity("DeTaiNhanSu.Models.CourseResult", b =>
-                {
-                    b.Property<Guid>("EmployeeId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("CourseId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<Guid>("QuestionId")
-                        .HasColumnType("uniqueidentifier");
-
-                    b.Property<DateTime>("AnsweredAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime2")
-                        .HasDefaultValueSql("SYSUTCDATETIME()");
-
-                    b.Property<string>("Chosen")
-                        .IsRequired()
-                        .HasMaxLength(1)
-                        .HasColumnType("nvarchar(1)");
-
-                    b.Property<bool>("IsCorrect")
-                        .HasColumnType("bit");
-
-                    b.HasKey("EmployeeId", "CourseId", "QuestionId");
-
-                    b.HasIndex("CourseId");
-
-                    b.HasIndex("QuestionId");
-
-                    b.ToTable("CourseResults", (string)null);
                 });
 
             modelBuilder.Entity("DeTaiNhanSu.Models.Department", b =>
@@ -877,6 +794,9 @@ namespace DeTaiNhanSu.Migrations
                     b.Property<Guid>("EmployeeId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTime?>("EndDate")
+                        .HasColumnType("datetime2");
+
                     b.Property<Guid?>("EvaluatedBy")
                         .HasColumnType("uniqueidentifier");
 
@@ -885,6 +805,9 @@ namespace DeTaiNhanSu.Migrations
 
                     b.Property<decimal?>("Score")
                         .HasColumnType("decimal(18,2)");
+
+                    b.Property<DateOnly?>("StartDate")
+                        .HasColumnType("date");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -1049,36 +972,6 @@ namespace DeTaiNhanSu.Migrations
                     b.Navigation("Employee");
 
                     b.Navigation("Representative");
-                });
-
-            modelBuilder.Entity("DeTaiNhanSu.Models.CourseQuestion", b =>
-                {
-                    b.HasOne("DeTaiNhanSu.Models.Course", "Course")
-                        .WithMany("Questions")
-                        .HasForeignKey("CourseId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Course");
-                });
-
-            modelBuilder.Entity("DeTaiNhanSu.Models.CourseResult", b =>
-                {
-                    b.HasOne("DeTaiNhanSu.Models.Course", "Course")
-                        .WithMany()
-                        .HasForeignKey("CourseId")
-                        .OnDelete(DeleteBehavior.NoAction)
-                        .IsRequired();
-
-                    b.HasOne("DeTaiNhanSu.Models.CourseQuestion", "Question")
-                        .WithMany()
-                        .HasForeignKey("QuestionId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Course");
-
-                    b.Navigation("Question");
                 });
 
             modelBuilder.Entity("DeTaiNhanSu.Models.Department", b =>
@@ -1317,11 +1210,6 @@ namespace DeTaiNhanSu.Migrations
                         .IsRequired();
 
                     b.Navigation("Employee");
-                });
-
-            modelBuilder.Entity("DeTaiNhanSu.Models.Course", b =>
-                {
-                    b.Navigation("Questions");
                 });
 
             modelBuilder.Entity("DeTaiNhanSu.Models.Department", b =>
