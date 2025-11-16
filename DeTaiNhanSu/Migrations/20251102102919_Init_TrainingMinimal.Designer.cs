@@ -4,6 +4,7 @@ using DeTaiNhanSu.DbContextProject;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace DeTaiNhanSu.Migrations
 {
     [DbContext(typeof(AppDbContext))]
-    partial class AppDbContextModelSnapshot : ModelSnapshot
+    [Migration("20251102102919_Init_TrainingMinimal")]
+    partial class Init_TrainingMinimal
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -169,28 +172,19 @@ namespace DeTaiNhanSu.Migrations
 
                     b.Property<string>("ClassCode")
                         .IsRequired()
-                        .HasMaxLength(50)
-                        .HasColumnType("nvarchar(50)");
+                        .HasColumnType("nvarchar(max)");
 
                     b.Property<DateTime>("CreatedAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime2")
-                        .HasDefaultValueSql("SYSUTCDATETIME()");
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("nvarchar(max)");
 
                     b.Property<int>("PassThreshold")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("int")
-                        .HasDefaultValue(70);
+                        .HasColumnType("int");
 
                     b.HasKey("Id");
-
-                    b.HasIndex("ClassCode")
-                        .IsUnique()
-                        .HasFilter("[ClassCode] IS NOT NULL AND [ClassCode] <> ''");
 
                     b.ToTable("Courses");
                 });
@@ -247,9 +241,7 @@ namespace DeTaiNhanSu.Migrations
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<DateTime>("AnsweredAt")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("datetime2")
-                        .HasDefaultValueSql("SYSUTCDATETIME()");
+                        .HasColumnType("datetime2");
 
                     b.Property<string>("Chosen")
                         .IsRequired()
@@ -257,7 +249,9 @@ namespace DeTaiNhanSu.Migrations
                         .HasColumnType("nvarchar(1)");
 
                     b.Property<bool>("IsCorrect")
-                        .HasColumnType("bit");
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("bit")
+                        .HasComputedColumnSql("CASE WHEN [Chosen] = [CorrectAtSubmit] THEN CONVERT(bit,1) ELSE CONVERT(bit,0) END", true);
 
                     b.HasKey("EmployeeId", "CourseId", "QuestionId");
 
@@ -988,7 +982,7 @@ namespace DeTaiNhanSu.Migrations
                     b.HasOne("DeTaiNhanSu.Models.Course", "Course")
                         .WithMany()
                         .HasForeignKey("CourseId")
-                        .OnDelete(DeleteBehavior.NoAction)
+                        .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
 
                     b.HasOne("DeTaiNhanSu.Models.CourseQuestion", "Question")

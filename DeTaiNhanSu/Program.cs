@@ -14,9 +14,11 @@ using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using System.Text;
 using System.Text.Json;
+using DeTaiNhanSu.Hubs;
 
 // đặt alias nếu muốn, hoặc bỏ alias và dùng trực tiếp AuditActionFilter
 using AuditActionFilter = DeTaiNhanSu.Services.Log.AuditActionFilter;
+using Microsoft.Extensions.Options;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -107,6 +109,26 @@ builder.Services
                 await context.Response.WriteAsync(payload);
             }
         };
+
+        o.Events = new JwtBearerEvents
+        {
+            OnMessageReceived = context =>
+            {
+                // Lấy JWT từ query string cho WebSocket
+                var accessToken = context.Request.Query["access_token"];
+
+                // Chỉ lấy token khi request đi vào Hub
+                var path = context.HttpContext.Request.Path;
+                if (!string.IsNullOrEmpty(accessToken) &&
+                    (path.StartsWithSegments("/notificationHub")))
+                {
+                    context.Token = accessToken;
+                }
+
+                return Task.CompletedTask;
+            }
+        };
+
     });
 
 // ==== Authorization (roles + permissions) ====
@@ -142,15 +164,26 @@ builder.Services.AddSwaggerGen(c =>
     });
 });
 
+// thêm service signalir
+builder.Services.AddSignalR();
+
 // ==== CORS ====
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("DevCors", policy =>
     {
         policy
-            .AllowAnyOrigin()
+            .WithOrigins(
+                "http://localhost:3000",  // URL của React App
+                "http://localhost:5500",
+                "http://127.0.0.1:5500",
+                "http://localhost:3000",
+                "https://hrm.frontend.ifanit.io.vn:3000",
+                "https://hrm.frontend.ifanit.io.vn"
+            )
             .AllowAnyMethod()
-            .AllowAnyHeader();
+            .AllowAnyHeader()
+            .AllowCredentials();
     });
 });
 
@@ -179,8 +212,12 @@ app.UseSwagger();
 app.UseSwaggerUI();
 app.MapOpenApi();
 
+app.UseStaticFiles();
+
 app.MapGet("/", () => Results.Redirect("/swagger"));
 
 app.MapControllers();
+
+app.MapHub<NotificationNewHub>("/notificationHub");
 
 app.Run();

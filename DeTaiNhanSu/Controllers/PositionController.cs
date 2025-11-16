@@ -2,9 +2,11 @@
 using DeTaiNhanSu.Common;
 using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos;
+using DeTaiNhanSu.Hubs;
 using DeTaiNhanSu.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace DeTaiNhanSu.Controllers
@@ -144,7 +146,15 @@ namespace DeTaiNhanSu.Controllers
 
         //follow schema
         private readonly AppDbContext _db;
-        public PositionController(AppDbContext db) => _db = db;
+
+        private readonly IHubContext<NotificationNewHub> _hubContext;
+
+        public PositionController(AppDbContext db, IHubContext<NotificationNewHub> hubContext)
+        {
+            _db = db;
+            _hubContext = hubContext;
+        }
+
 
         // GET /api/position?q=&page=&pageSize=&sort=Name|-Name|Level|-Level
         //[HttpGet]
@@ -425,6 +435,12 @@ namespace DeTaiNhanSu.Controllers
                     EmployeesCount = pos.Employees.Count
                 };
 
+                // thêm gọi signal ir sau khi thêm
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "PositionChanged",
+                    new { action = "create", data = dto },
+                    ct);
+
                 // Trả 201 với full object theo schema (data.result)
                 return StatusCode(StatusCodes.Status201Created, new
                 {
@@ -626,6 +642,12 @@ namespace DeTaiNhanSu.Controllers
                     EmployeesCount = pos.Employees.Count
                 };
 
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "PositionChanged",
+                    new { action = "update", data = dto },
+                    ct);
+
+
                 // 200 theo schema: data.result = dto
                 return StatusCode(StatusCodes.Status200OK, new
                 {
@@ -666,6 +688,11 @@ namespace DeTaiNhanSu.Controllers
 
                 _db.Positions.Remove(p);
                 await _db.SaveChangesAsync(ct);
+
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "PositionChanged",
+                    new { action = "delete", data = new { id = id } },
+                    ct);
 
                 return this.OK(message: "Xoá chức vụ thành công.");
             }

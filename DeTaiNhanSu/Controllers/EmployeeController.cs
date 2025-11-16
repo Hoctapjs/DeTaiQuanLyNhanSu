@@ -1096,6 +1096,8 @@ using System.Security.Cryptography;
 // THÊM dòng này để dùng this.OK/this.FAIL/...
 using DeTaiNhanSu.Common;
 using System.Text.Json;
+using Microsoft.AspNetCore.SignalR;
+using DeTaiNhanSu.Hubs;
 
 namespace DeTaiNhanSu.Controllers
 {
@@ -1106,12 +1108,14 @@ namespace DeTaiNhanSu.Controllers
         private readonly AppDbContext _db;
         private readonly IEmailSender _emailSender;
         private readonly IPasswordHasher<User> _hasher;
+        private readonly IHubContext<NotificationNewHub> _hubContext;
 
-        public EmployeeController(AppDbContext db, IEmailSender emailSender, IPasswordHasher<User> hasher)
+        public EmployeeController(AppDbContext db, IEmailSender emailSender, IPasswordHasher<User> hasher, IHubContext<NotificationNewHub> hubContext)
         {
             _db = db;
             _emailSender = emailSender;
             _hasher = hasher;
+            _hubContext = hubContext;
         }
 
         //[HttpGet]
@@ -2076,10 +2080,292 @@ namespace DeTaiNhanSu.Controllers
             }
         }
 
+        //[HttpPost]
+        //[HasPermission("Employees.Manage")]
+        //[Authorize(Roles = "HR, Admin")]
+        //public async Task<IActionResult> Create([FromBody] CreateEmployeeRequest req, CancellationToken ct)
+        //{
+        //    try
+        //    {
+        //        if (req is null || string.IsNullOrWhiteSpace(req.FullName))
+        //            return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
+
+        //        // Sinh code tránh trùng
+        //        string employeeCode;
+        //        do
+        //        {
+        //            employeeCode = "NV-" + Random.Shared.Next(100000, 999999);
+        //        } while (await _db.Employees.AnyAsync(x => x.Code == employeeCode, ct));
+
+        //        string username = await GenerateUniqueUsernameAsync(req.FullName, ct);
+        //        const string companyDomain = "@huynhthanhson.io.vn";
+        //        string employeeEmail = $@"{username}{companyDomain}";
+        //        string tempPasswordEmail = "Temp@123";
+
+        //        var e = new Employee
+        //        {
+        //            Id = Guid.NewGuid(),
+        //            Code = employeeCode,
+        //            FullName = req.FullName,
+        //            Gender = req.Gender,
+        //            Dob = req.Dob,
+        //            Cccd = req.Cccd,
+        //            Email = req.Email!, // hoặc employeeEmail nếu muốn auto email công ty
+        //            Phone = req.Phone,
+        //            Address = req.Address,
+        //            HireDate = req.HireDate ?? DateOnly.FromDateTime(DateTime.UtcNow),
+        //            DepartmentId = req.DepartmentId,
+        //            PositionId = req.PositionId,
+        //            Status = req.Status ?? EmployeeStatus.active,
+        //            AvatarUrl = req.AvatarUrl
+        //        };
+
+        //        _db.Employees.Add(e);
+
+        //        string tempPassword = GenerateTempPassword();
+
+        //        var role = await _db.Roles.FirstOrDefaultAsync(r => r.Name == "User", ct);
+        //        if (role is null)
+        //            return this.FAIL(StatusCodes.Status400BadRequest, "Không tìm thấy role hợp lệ.");
+
+        //        var user = new User
+        //        {
+        //            Id = Guid.NewGuid(),
+        //            EmployeeId = e.Id,
+        //            UserName = username,
+        //            RoleId = role.Id,
+        //            Status = UserStatus.active
+        //        };
+        //        user.PasswordHash = _hasher.HashPassword(user, tempPassword);
+        //        _db.Users.Add(user);
+
+        //        await _db.SaveChangesAsync(ct);
+
+        //        // Gửi mail (không chặn tạo nếu lỗi gửi)
+        //        try
+        //        {
+        //            var to = req.Email!;
+        //            var subject = "Tài khoản nhân sự của bạn đã được tạo";
+        //            //var body = $@"
+        //            //    <!DOCTYPE html>
+        //            //    <html lang='vi'><head><meta charset='UTF-8'><title>Thông báo</title></head>
+        //            //    <body>
+        //            //        <h2>Xin chào {req.FullName},</h2>
+        //            //        <p>Tài khoản HRM đã được tạo.</p>
+        //            //        <ul>
+        //            //            <li><b>Username:</b> {username}</li>
+        //            //            <li><b>Mật khẩu tạm:</b> {tempPassword}</li>
+        //            //            <li><b>Email công ty:</b> {employeeEmail}</li>
+        //            //            <li><b>Mật khẩu Email:</b> {tempPasswordEmail}</li>
+        //            //            <li><a href='https://www.google.com/'>Đăng Nhập User</a></li>
+        //            //            <li><a href='https://webmail.huynhthanhson.io.vn/'>Đăng Nhập Web Mail Công Ty</a></li>
+        //            //        </ul>
+        //            //    </body></html>";
+
+        //            string hrmUrl = "https://google.com";
+        //            string webmailUrl = "https://webmail.huynhthanhson.io.vn";
+        //            string tempPasswordExpireAt = DateTime.UtcNow.AddDays(1).ToString("yyyy-MM-dd HH:mm 'ICT'");
+        //            string helpEmail = "support@huynhthanhson.io.vn";
+        //            string companyName = "Công Ty TNHH NPS";
+        //            string companyAddress = "140 Lê Trọng Tấn, Tây Thạnh, Tân Phú";
+
+        //            var body = $@"
+        //                <!doctype html>
+        //                <html lang='vi'>
+        //                <head>
+        //                  <meta charset='utf-8'>
+        //                  <meta name='viewport' content='width=device-width, initial-scale=1'>
+        //                  <title>Chào mừng đến HRM</title>
+        //                  <!-- Preheader: hiện trong preview của hộp thư -->
+        //                  <style>
+        //                    /* Một số client vẫn tôn trọng <style>, nhưng ta vẫn inline phần quan trọng */
+        //                  </style>
+        //                </head>
+        //                <body style='margin:0;padding:0;background:#f5f7fa;'>
+        //                  <!-- Preheader (ẩn) -->
+        //                  <div style='display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;'>
+        //                    Tài khoản HRM & email công ty đã được tạo. Hãy đăng nhập và đổi mật khẩu trong ngày đầu tiên.
+        //                  </div>
+
+        //                  <table role='presentation' border='0' cellpadding='0' cellspacing='0' width='100%'>
+        //                    <tr>
+        //                      <td align='center' style='padding:24px 12px;'>
+        //                        <table role='presentation' width='600' cellpadding='0' cellspacing='0' style='width:600px;max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e6e9ef;'>
+        //                          <!-- Header -->
+        //                          <tr>
+        //                            <td style='background:#0f172a;padding:20px 24px;color:#fff;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;'>
+        //                              <h1 style='margin:0;font-size:20px;line-height:1.4;'>Chào mừng đến hệ thống HRM</h1>
+        //                              <p style='margin:4px 0 0;font-size:13px;opacity:.85;'>Thông tin tài khoản cho nhân viên mới</p>
+        //                            </td>
+        //                          </tr>
+
+        //                          <!-- Nội dung chính -->
+        //                          <tr>
+        //                            <td style='padding:24px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;'>
+        //                              <p style='margin:0 0 12px;font-size:15px;'>Xin chào <b>{req.FullName}</b>,</p>
+        //                              <p style='margin:0 0 16px;font-size:15px;'>Tài khoản làm việc của bạn đã được tạo. Vui lòng làm theo các bước bên dưới để bắt đầu.</p>
+
+        //                              <table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='margin:8px 0 16px;border:1px solid #e6e9ef;border-radius:8px;'>
+        //                                <tr>
+        //                                  <td style='padding:12px 16px;background:#f8fafc;border-bottom:1px solid #e6e9ef;font-weight:600;font-size:14px;'>Thông tin đăng nhập</td>
+        //                                </tr>
+        //                                <tr>
+        //                                  <td style='padding:12px 16px;font-size:14px;'>
+        //                                    <div style='margin:0 0 8px;'><b>HRM Username:</b> {username}</div>
+        //                                    <div style='margin:0 0 8px;'><b>HRM Mật khẩu tạm:</b> <code style='background:#f1f5f9;padding:2px 6px;border-radius:4px;'>{tempPassword}</code></div>
+        //                                    <div style='margin:0 0 8px;'><b>Email công ty:</b> {employeeEmail}</div>
+        //                                    <div style='margin:0;'><b>Email Mật khẩu tạm:</b> <code style='background:#f1f5f9;padding:2px 6px;border-radius:4px;'>{tempPasswordEmail}</code></div>
+        //                                  </td>
+        //                                </tr>
+        //                              </table>
+
+        //                              <table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='margin:0 0 16px;border:1px solid #e6e9ef;border-radius:8px;'>
+        //                                <tr>
+        //                                  <td style='padding:12px 16px;background:#f8fafc;border-bottom:1px solid #e6e9ef;font-weight:600;font-size:14px;'>Bắt đầu trong 3 bước</td>
+        //                                </tr>
+        //                                <tr>
+        //                                  <td style='padding:12px 16px;font-size:14px;line-height:1.6;'>
+        //                                    <ol style='margin:0;padding-left:20px;'>
+        //                                      <li><b>Đăng nhập HRM:</b> Nhấn nút bên dưới &rarr; dùng <i>HRM Username</i> và <i>Mật khẩu tạm</i> &rarr; hệ thống sẽ yêu cầu bạn <b>đổi mật khẩu</b>.
+        //                                        <div style='margin:10px 0;'>
+        //                                          <a href='{hrmUrl}' style='background:#2563eb;text-decoration:none;color:#fff;padding:10px 16px;border-radius:8px;display:inline-block;font-weight:600;'>Đăng nhập HRM</a>
+        //                                        </div>
+        //                                      </li>
+        //                                      <li><b>Thiết lập email công ty:</b> Mở Webmail &rarr; đăng nhập bằng <i>Email công ty</i> và <i>Mật khẩu tạm</i> &rarr; đổi mật khẩu &rarr; (khuyến nghị) thêm chữ ký.
+        //                                        <div style='margin:10px 0;'>
+        //                                          <a href='{webmailUrl}' style='background:#16a34a;text-decoration:none;color:#fff;padding:10px 16px;border-radius:8px;display:inline-block;font-weight:600;'>Đăng nhập Webmail</a>
+        //                                        </div>
+        //                                      </li>
+        //                                      <li><b>Bảo mật tài khoản:</b> Bật 2FA (nếu HRM cho phép), không chia sẻ mật khẩu, và không dùng chung mật khẩu giữa HRM & Email.</li>
+        //                                    </ol>
+        //                                  </td>
+        //                                </tr>
+        //                              </table>
+
+        //                              <table role='presentation' width='100%' cellpadding='0' cellspacing='0' style='margin:0 0 16px;border:1px solid #e6e9ef;border-radius:8px;'>
+        //                                <tr>
+        //                                  <td style='padding:12px 16px;background:#f8fafc;border-bottom:1px solid #e6e9ef;font-weight:600;font-size:14px;'>Lưu ý quan trọng</td>
+        //                                </tr>
+        //                                <tr>
+        //                                  <td style='padding:12px 16px;font-size:13px;line-height:1.6;color:#334155;'>
+        //                                    <ul style='margin:0;padding-left:18px;'>
+        //                                      <li>Mật khẩu tạm <b>hết hạn</b>: {tempPasswordExpireAt}.</li>
+        //                                      <li>Mật khẩu mạnh &ge; 8 ký tự, gồm chữ hoa, chữ thường, số, ký tự đặc biệt.</li>
+        //                                      <li>Nếu email rơi vào mục <i>Spam/Junk</i>, hãy <b>Mark as Not Spam</b> để nhận mail bình thường.</li>
+        //                                      <li>Khi cần hỗ trợ, liên hệ: <a href='mailto:{helpEmail}' style='color:#2563eb;text-decoration:none;'>{helpEmail}</a>.</li>
+        //                                    </ul>
+        //                                  </td>
+        //                                </tr>
+        //                              </table>
+
+        //                              <p style='margin:12px 0 0;font-size:14px;color:#475569;'>
+        //                                Trân trọng,<br>
+        //                                Phòng Hành chính – Nhân sự
+        //                              </p>
+        //                            </td>
+        //                          </tr>
+
+        //                          <!-- Footer -->
+        //                          <tr>
+        //                            <td style='background:#f8fafc;padding:16px 24px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#64748b;'>
+        //                              <div>{companyName} &bull; {companyAddress}</div>
+        //                              <div style='margin-top:4px;'>Email hỗ trợ: <a href='mailto:{helpEmail}' style='color:#2563eb;text-decoration:none;'>{helpEmail}</a></div>
+        //                            </td>
+        //                          </tr>
+        //                        </table>
+
+        //                        <div style='font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:11px;color:#94a3b8;margin-top:12px;max-width:600px;'>
+        //                          Bạn nhận email này vì hồ sơ của bạn được tạo trong hệ thống HRM. Nếu bạn không mong đợi, vui lòng liên hệ {helpEmail}.
+        //                        </div>
+        //                      </td>
+        //                    </tr>
+        //                  </table>
+        //                </body>
+        //                </html>";
+
+        //            await _emailSender.SendAsync(to, subject, body, ct);
+        //        }
+        //        catch { /* swallow email error per policy */ }
+
+        //        //return this.CREATED("Tạo nhân viên thành công.");
+        //        //return StatusCode(StatusCodes.Status201Created, new
+        //        //{
+        //        //    statusCode = StatusCodes.Status201Created,
+        //        //    message = "Tạo nhân viên thành công.",
+        //        //    data = new[]
+        //        //    {
+        //        //        new
+        //        //        {
+        //        //            EmployeeId = e.Id,
+        //        //            Username = username
+        //        //        }
+        //        //    },
+        //        //    success = true
+        //        //});
+
+        //        // === Load lại đầy đủ để trả FULL object vừa tạo ===
+        //        var full = await _db.Employees
+        //            .AsNoTracking()
+        //            .Include(x => x.Department)
+        //            .Include(x => x.Position)
+        //            .FirstAsync(x => x.Id == e.Id, ct);
+
+        //        var dto = new EmployeeDto
+        //        {
+        //            Id = full.Id,
+        //            Code = full.Code,
+        //            FullName = full.FullName,
+        //            Gender = full.Gender,
+        //            Dob = full.Dob,
+        //            Cccd = full.Cccd,
+        //            Email = full.Email,
+        //            Phone = full.Phone,
+        //            Address = full.Address,
+        //            HireDate = full.HireDate,
+        //            DepartmentId = full.DepartmentId,
+        //            DepartmentName = full.Department?.Name,
+        //            PositionId = full.PositionId,
+        //            PositionName = full.Position?.Name,
+        //            Status = full.Status,
+        //            AvatarUrl = full.AvatarUrl
+        //        };
+
+        //        // Trả 201 với FULL employee + thông tin account tạo kèm
+        //        return StatusCode(StatusCodes.Status201Created, new
+        //        {
+        //            statusCode = StatusCodes.Status201Created,
+        //            message = "Tạo nhân viên thành công.",
+        //            data = new
+        //            {
+        //                result = new
+        //                {
+        //                    employee = dto,
+        //                    account = new
+        //                    {
+        //                        id = user.Id,
+        //                        username = username,
+        //                        roleId = role.Id
+        //                    }
+        //                }
+        //            },
+        //            success = true
+        //        });
+        //    }
+        //    catch (DbUpdateException)
+        //    {
+        //        return this.FAIL(StatusCodes.Status409Conflict, "Không thể tạo nhân viên do xung đột dữ liệu (trùng hoặc ràng buộc).");
+        //    }
+        //    catch
+        //    {
+        //        return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi tạo nhân viên.");
+        //    }
+        //}
+
         [HttpPost]
         [HasPermission("Employees.Manage")]
         [Authorize(Roles = "HR, Admin")]
-        public async Task<IActionResult> Create([FromBody] CreateEmployeeRequest req, CancellationToken ct)
+        [Consumes("multipart/form-data")]
+        public async Task<IActionResult> Create([FromForm] CreateEmployeeFormRequest req, IFormFile? avatarFile, CancellationToken ct)
         {
             try
             {
@@ -2113,8 +2399,37 @@ namespace DeTaiNhanSu.Controllers
                     DepartmentId = req.DepartmentId,
                     PositionId = req.PositionId,
                     Status = req.Status ?? EmployeeStatus.active,
-                    AvatarUrl = req.AvatarUrl
                 };
+
+                // --- Xử lý upload ảnh nếu có (tham khảo logic từ UploadAvatar) ---
+                if (avatarFile != null && avatarFile.Length > 0)
+                {
+                    var allowed = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
+                    var ext = Path.GetExtension(avatarFile.FileName).ToLowerInvariant();
+                    if (!allowed.Contains(ext))
+                        return this.FAIL(StatusCodes.Status400BadRequest, "Định dạng file không hợp lệ. Chỉ chấp nhận JPG, PNG, GIF, WEBP.");
+
+                    var uploadRoot = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "avatars");
+                    if (!Directory.Exists(uploadRoot))
+                        Directory.CreateDirectory(uploadRoot);
+
+                    var safeFileName = $"{e.Id:N}_{DateTime.UtcNow:yyyyMMddHHmmss}{ext}";
+                    var fullPath = Path.Combine(uploadRoot, safeFileName);
+
+                    using (var stream = new FileStream(fullPath, FileMode.Create))
+                    {
+                        await avatarFile.CopyToAsync(stream, ct);
+                    }
+
+                    var baseUrl = $"{Request.Scheme}://{Request.Host}";
+                    var relativePath = $"/uploads/avatars/{safeFileName}";
+                    e.AvatarUrl = $"{baseUrl}{relativePath}";
+                }
+                else
+                {
+                    // fallback nếu không upload
+                    e.AvatarUrl = "/uploads/avatars/default.png";
+                }
 
                 _db.Employees.Add(e);
 
@@ -2325,6 +2640,11 @@ namespace DeTaiNhanSu.Controllers
                     Status = full.Status,
                     AvatarUrl = full.AvatarUrl
                 };
+
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "EmployeeChanged",
+                    new { action = "create", data = dto },
+                    ct);
 
                 // Trả 201 với FULL employee + thông tin account tạo kèm
                 return StatusCode(StatusCodes.Status201Created, new
@@ -2642,199 +2962,476 @@ namespace DeTaiNhanSu.Controllers
         //    }
         //}
 
+        //[HttpPut("{id:guid}")]
+        //[HasPermission("Employees.Manage")]
+        //[Authorize(Roles = "HR, Admin")]
+        //public async Task<IActionResult> Update(Guid id, [FromForm] JsonElement body, CancellationToken ct)
+        //{
+        //    try
+        //    {
+        //        if (body.ValueKind != JsonValueKind.Object)
+        //            return this.FAIL(StatusCodes.Status400BadRequest, "Body phải là JSON object.");
+
+        //        var e = await _db.Employees.FirstOrDefaultAsync(x => x.Id == id, ct);
+        //        if (e is null)
+        //            return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy nhân viên.");
+
+        //        // --- helpers ---
+        //        static string? GetStringOrNull(JsonElement prop) =>
+        //            prop.ValueKind switch
+        //            {
+        //                JsonValueKind.Null => null,
+        //                JsonValueKind.String => string.IsNullOrWhiteSpace(prop.GetString()) ? null : prop.GetString()!.Trim(),
+        //                _ => null
+        //            };
+
+        //        static Guid? GetGuidOrNull(JsonElement prop)
+        //        {
+        //            if (prop.ValueKind == JsonValueKind.Null) return null;
+        //            if (prop.ValueKind == JsonValueKind.String && Guid.TryParse(prop.GetString(), out var g)) return g;
+        //            return null;
+        //        }
+
+        //        static bool TryGetDateOnly(JsonElement prop, out DateOnly? value)
+        //        {
+        //            value = null;
+        //            if (prop.ValueKind == JsonValueKind.Null) return true;
+        //            if (prop.ValueKind == JsonValueKind.String && DateOnly.TryParse(prop.GetString(), out var d)) { value = d; return true; }
+        //            return false;
+        //        }
+
+        //        static bool TryGetInt(JsonElement prop, out int? value)
+        //        {
+        //            value = null;
+        //            if (prop.ValueKind == JsonValueKind.Null) return true;
+        //            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var i)) { value = i; return true; }
+        //            if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var j)) { value = j; return true; }
+        //            return false;
+        //        }
+
+        //        // --- Code (unique, non-empty) ---
+        //        if (body.TryGetProperty("code", out var codeProp))
+        //        {
+        //            var newCode = GetStringOrNull(codeProp);
+        //            if (string.IsNullOrWhiteSpace(newCode))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "Mã nhân viên không được để trống.");
+
+        //            var duplicate = await _db.Employees.AnyAsync(x => x.Code == newCode && x.Id != id, ct);
+        //            if (duplicate)
+        //                return this.FAIL(StatusCodes.Status409Conflict, $"Mã nhân viên '{newCode}' đã tồn tại.");
+
+        //            e.Code = newCode!;
+        //        }
+
+        //        // --- FullName (non-empty) ---
+        //        if (body.TryGetProperty("fullName", out var fullNameProp))
+        //        {
+        //            var newFullName = GetStringOrNull(fullNameProp);
+        //            if (string.IsNullOrWhiteSpace(newFullName))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "Họ tên không được để trống.");
+        //            e.FullName = newFullName!;
+        //        }
+
+        //        // --- Email (unique, non-empty) ---
+        //        if (body.TryGetProperty("email", out var emailProp))
+        //        {
+        //            var newEmail = GetStringOrNull(emailProp);
+        //            if (string.IsNullOrWhiteSpace(newEmail))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "Email không được để trống.");
+
+        //            if (!string.Equals(e.Email, newEmail, StringComparison.OrdinalIgnoreCase))
+        //            {
+        //                var dup = await _db.Employees.AnyAsync(x => x.Email == newEmail, ct);
+        //                if (dup) return this.FAIL(StatusCodes.Status409Conflict, "Email đã tồn tại.");
+        //                e.Email = newEmail!;
+        //            }
+        //        }
+
+        //        // --- CCCD (unique, allow null to clear) ---
+        //        if (body.TryGetProperty("cccd", out var cccdProp))
+        //        {
+        //            var newCccd = GetStringOrNull(cccdProp);
+        //            if (!string.Equals(e.Cccd ?? "", newCccd ?? "", StringComparison.OrdinalIgnoreCase))
+        //            {
+        //                if (!string.IsNullOrWhiteSpace(newCccd))
+        //                {
+        //                    var dup = await _db.Employees.AnyAsync(x => x.Cccd == newCccd, ct);
+        //                    if (dup) return this.FAIL(StatusCodes.Status409Conflict, "CCCD đã tồn tại.");
+        //                }
+        //                e.Cccd = newCccd;
+        //            }
+        //        }
+
+        //        // --- Phone (unique, allow null to clear) ---
+        //        if (body.TryGetProperty("phone", out var phoneProp))
+        //        {
+        //            var newPhone = GetStringOrNull(phoneProp);
+        //            if (!string.Equals(e.Phone ?? "", newPhone ?? "", StringComparison.OrdinalIgnoreCase))
+        //            {
+        //                if (!string.IsNullOrWhiteSpace(newPhone))
+        //                {
+        //                    var dup = await _db.Employees.AnyAsync(x => x.Phone == newPhone, ct);
+        //                    if (dup) return this.FAIL(StatusCodes.Status409Conflict, "Phone đã tồn tại.");
+        //                }
+        //                e.Phone = newPhone;
+        //            }
+        //        }
+
+        //        // --- Address (allow null) ---
+        //        if (body.TryGetProperty("address", out var addrProp))
+        //            e.Address = GetStringOrNull(addrProp);
+
+        //        // --- AvatarUrl (allow null) ---
+        //        if (body.TryGetProperty("avatarUrl", out var avatarProp))
+        //            e.AvatarUrl = GetStringOrNull(avatarProp);
+
+        //        // --- Gender (enum) ---
+        //        if (body.TryGetProperty("gender", out var genderProp))
+        //        {
+        //            if (!TryGetInt(genderProp, out var newGender))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "gender phải là số hoặc null.");
+        //            if (newGender.HasValue && (newGender < 0 || newGender > 2))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "Giá trị gender không hợp lệ.");
+        //            if (newGender.HasValue) e.Gender = (Gender)newGender.Value;
+        //        }
+
+        //        // --- Status (enum) ---
+        //        if (body.TryGetProperty("status", out var statusProp))
+        //        {
+        //            if (!TryGetInt(statusProp, out var newStatus))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "status phải là số hoặc null.");
+        //            if (newStatus.HasValue && (newStatus < 0 || newStatus > 5))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "Giá trị status không hợp lệ.");
+        //            if (newStatus.HasValue) e.Status = (EmployeeStatus)newStatus.Value;
+        //        }
+
+        //        // --- Dob (DateOnly) ---
+        //        if (body.TryGetProperty("dob", out var dobProp))
+        //        {
+        //            if (!TryGetDateOnly(dobProp, out var newDob))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "dob phải là 'yyyy-MM-dd' hoặc null.");
+        //            e.Dob = newDob;
+        //        }
+
+        //        // --- HireDate (DateOnly) ---
+        //        if (body.TryGetProperty("hireDate", out var hireProp))
+        //        {
+        //            if (!TryGetDateOnly(hireProp, out var newHire))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "hireDate phải là 'yyyy-MM-dd' hoặc null.");
+        //            if (newHire.HasValue) e.HireDate = newHire.Value;
+        //        }
+
+        //        // --- DepartmentId ---
+        //        if (body.TryGetProperty("departmentId", out var depProp))
+        //        {
+        //            var newDepId = GetGuidOrNull(depProp);
+        //            if (depProp.ValueKind != JsonValueKind.Null && newDepId is null)
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "departmentId phải là GUID hoặc null.");
+
+        //            if (newDepId != e.DepartmentId)
+        //            {
+        //                if (newDepId.HasValue)
+        //                {
+        //                    var depExists = await _db.Departments.AnyAsync(d => d.Id == newDepId.Value, ct);
+        //                    if (!depExists) return this.FAIL(StatusCodes.Status404NotFound, "Phòng ban không tồn tại.");
+        //                }
+        //                e.DepartmentId = newDepId;
+        //            }
+        //        }
+
+        //        // --- PositionId ---
+        //        if (body.TryGetProperty("positionId", out var posProp))
+        //        {
+        //            var newPosId = GetGuidOrNull(posProp);
+        //            if (posProp.ValueKind != JsonValueKind.Null && newPosId is null)
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "positionId phải là GUID hoặc null.");
+
+        //            if (newPosId != e.PositionId)
+        //            {
+        //                if (newPosId.HasValue)
+        //                {
+        //                    var posExists = await _db.Positions.AnyAsync(p => p.Id == newPosId.Value, ct);
+        //                    if (!posExists) return this.FAIL(StatusCodes.Status404NotFound, "Chức vụ không tồn tại.");
+        //                }
+        //                e.PositionId = newPosId;
+        //            }
+        //        }
+
+        //        await _db.SaveChangesAsync(ct);
+
+        //        // === Load lại đầy đủ để trả về FULL object ===
+        //        var full = await _db.Employees
+        //            .AsNoTracking()
+        //            .Include(x => x.Department)
+        //            .Include(x => x.Position)
+        //            .FirstAsync(x => x.Id == e.Id, ct);
+
+        //        var dto = new EmployeeDto
+        //        {
+        //            Id = full.Id,
+        //            Code = full.Code,
+        //            FullName = full.FullName,
+        //            Gender = full.Gender,
+        //            Dob = full.Dob,
+        //            Cccd = full.Cccd,
+        //            Email = full.Email,
+        //            Phone = full.Phone,
+        //            Address = full.Address,
+        //            HireDate = full.HireDate,
+        //            DepartmentId = full.DepartmentId,
+        //            DepartmentName = full.Department?.Name,
+        //            PositionId = full.PositionId,
+        //            PositionName = full.Position?.Name,
+        //            Status = full.Status,
+        //            AvatarUrl = full.AvatarUrl
+        //        };
+
+        //        try
+        //        {
+        //            if (!string.IsNullOrWhiteSpace(full.Email))
+        //            {
+        //                // (tuỳ bạn) có thể lấy từ cấu hình
+        //                string hrmUrlBase = "https://google.com"; // URL HRM của bạn
+        //                string helpEmail = "support@huynhthanhson.io.vn";
+        //                string companyName = "Công Ty TNHH NPS";
+        //                string companyAddress = "140 Lê Trọng Tấn, Tây Thạnh, Tân Phú";
+
+        //                // Link đến hồ sơ nhân viên
+        //                var profileUrl = $"{hrmUrlBase}/employees/{full.Id}";
+
+        //                var subject = $"[HRM] Cập nhật hồ sơ nhân viên: {full.FullName} ({full.Code})";
+
+        //                // Lưu ý: encode một số trường tự do để tránh phá HTML
+        //                string Enc(string? s) => System.Net.WebUtility.HtmlEncode(s ?? "-");
+        //                string ToDate(DateOnly? d) => d.HasValue ? d.Value.ToString("yyyy-MM-dd") : "-";
+
+        //                var bodymail = $@"
+        //                    <!doctype html>
+        //                    <html lang='vi'>
+        //                    <head>
+        //                      <meta charset='utf-8'>
+        //                      <meta name='viewport' content='width=device-width, initial-scale=1'>
+        //                      <title>Cập nhật hồ sơ</title>
+        //                    </head>
+        //                    <body style='margin:0;padding:0;background:#f5f7fa;'>
+        //                      <!-- Preheader -->
+        //                      <div style='display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;'>
+        //                        Hồ sơ của bạn trên HRM vừa được cập nhật.
+        //                      </div>
+
+        //                      <table role='presentation' width='100%' cellspacing='0' cellpadding='0' border='0'>
+        //                        <tr>
+        //                          <td align='center' style='padding:24px 12px;'>
+        //                            <table role='presentation' width='600' cellspacing='0' cellpadding='0'
+        //                                   style='width:600px;max-width:600px;background:#ffffff;border-radius:12px;overflow:hidden;border:1px solid #e6e9ef;'>
+        //                              <!-- Header -->
+        //                              <tr>
+        //                                <td style='background:#0f172a;padding:20px 24px;color:#fff;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;'>
+        //                                  <h1 style='margin:0;font-size:20px;line-height:1.4;'>Cập nhật hồ sơ nhân viên</h1>
+        //                                  <p style='margin:4px 0 0;font-size:13px;opacity:.85;'>Mã NV: {Enc(full.Code)}</p>
+        //                                </td>
+        //                              </tr>
+
+        //                              <!-- Content -->
+        //                              <tr>
+        //                                <td style='padding:24px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#0f172a;'>
+        //                                  <p style='margin:0 0 12px;font-size:15px;'>Xin chào <b>{Enc(full.FullName)}</b>,</p>
+        //                                  <p style='margin:0 0 16px;font-size:15px;'>Hồ sơ của bạn trên hệ thống HRM vừa được cập nhật. Thông tin hiện tại:</p>
+
+        //                                  <table role='presentation' width='100%' cellspacing='0' cellpadding='0'
+        //                                         style='margin:8px 0 16px;border:1px solid #e6e9ef;border-radius:8px;'>
+        //                                    <tr>
+        //                                      <td style='padding:12px 16px;background:#f8fafc;border-bottom:1px solid #e6e9ef;font-weight:600;font-size:14px;'>
+        //                                        Thông tin chi tiết
+        //                                      </td>
+        //                                    </tr>
+        //                                    <tr>
+        //                                      <td style='padding:12px 16px;font-size:14px;line-height:1.8;'>
+        //                                        <div><b>Họ tên:</b> {Enc(full.FullName)}</div>
+        //                                        <div><b>Email:</b> {Enc(full.Email)}</div>
+        //                                        <div><b>Điện thoại:</b> {Enc(full.Phone)}</div>
+        //                                        <div><b>Địa chỉ:</b> {Enc(full.Address)}</div>
+        //                                        <div><b>Giới tính:</b> {full.Gender}</div>
+        //                                        <div><b>Ngày sinh:</b> {ToDate(full.Dob)}</div>
+        //                                        <div><b>Ngày vào làm:</b> {ToDate(full.HireDate)}</div>
+        //                                        <div><b>Phòng ban:</b> {Enc(full.Department?.Name)}</div>
+        //                                        <div><b>Chức vụ:</b> {Enc(full.Position?.Name)}</div>
+        //                                        <div><b>Trạng thái:</b> {full.Status}</div>
+        //                                      </td>
+        //                                    </tr>
+        //                                  </table>
+
+        //                                  <p style='margin:16px 0 0;font-size:13px;color:#334155;'>
+        //                                    Nếu có sai sót, vui lòng phản hồi về <a href='mailto:{helpEmail}' style='color:#2563eb;text-decoration:none;'>{helpEmail}</a>.
+        //                                  </p>
+        //                                </td>
+        //                              </tr>
+
+        //                              <!-- Footer -->
+        //                              <tr>
+        //                                <td style='background:#f8fafc;padding:16px 24px;font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#64748b;'>
+        //                                  <div>{companyName} • {companyAddress}</div>
+        //                                  <div style='margin-top:4px;'>Email hỗ trợ: <a href='mailto:{helpEmail}' style='color:#2563eb;text-decoration:none;'>{helpEmail}</a></div>
+        //                                </td>
+        //                              </tr>
+        //                            </table>
+
+        //                            <div style='font-family:Segoe UI,Roboto,Helvetica,Arial,sans-serif;font-size:11px;color:#94a3b8;margin-top:12px;max-width:600px;'>
+        //                              Bạn nhận thư này vì hồ sơ của bạn đã được cập nhật trên hệ thống HRM.
+        //                            </div>
+        //                          </td>
+        //                        </tr>
+        //                      </table>
+        //                    </body>
+        //                    </html>";
+
+        //                await _emailSender.SendAsync(full.Email!, subject, bodymail, ct);
+        //            }
+        //        }
+        //        catch
+        //        {
+        //            // Không chặn nghiệp vụ nếu gửi mail lỗi
+        //        }
+
+        //        return StatusCode(StatusCodes.Status200OK, new
+        //        {
+        //            statusCode = StatusCodes.Status200OK,
+        //            message = "Cập nhật nhân viên thành công.",
+        //            data = new { result = dto },
+        //            success = true
+        //        });
+        //    }
+        //    catch (DbUpdateConcurrencyException)
+        //    {
+        //        return this.FAIL(StatusCodes.Status409Conflict, "Xung đột cập nhật: bản ghi đã thay đổi trước đó.");
+        //    }
+        //    catch
+        //    {
+        //        return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi cập nhật nhân viên.");
+        //    }
+        //}
+
         [HttpPut("{id:guid}")]
         [HasPermission("Employees.Manage")]
         [Authorize(Roles = "HR, Admin")]
-        public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
+        public async Task<IActionResult> Update(Guid id, [FromForm] EmployeeUpdateFormRequest req, IFormFile? avatarFile, CancellationToken ct)
         {
             try
             {
-                if (body.ValueKind != JsonValueKind.Object)
-                    return this.FAIL(StatusCodes.Status400BadRequest, "Body phải là JSON object.");
-
                 var e = await _db.Employees.FirstOrDefaultAsync(x => x.Id == id, ct);
                 if (e is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy nhân viên.");
 
-                // --- helpers ---
-                static string? GetStringOrNull(JsonElement prop) =>
-                    prop.ValueKind switch
+                // ==== VALIDATION & CẬP NHẬT TRƯỜNG ====
+
+                // Code (unique)
+                if (!string.IsNullOrWhiteSpace(req.Code))
+                {
+                    var dup = await _db.Employees.AnyAsync(x => x.Code == req.Code && x.Id != id, ct);
+                    if (dup)
+                        return this.FAIL(StatusCodes.Status409Conflict, $"Mã nhân viên '{req.Code}' đã tồn tại.");
+                    e.Code = req.Code.Trim();
+                }
+
+                // FullName
+                if (!string.IsNullOrWhiteSpace(req.FullName))
+                    e.FullName = req.FullName.Trim();
+
+                // Email (unique)
+                if (!string.IsNullOrWhiteSpace(req.Email))
+                {
+                    var dup = await _db.Employees.AnyAsync(x => x.Email == req.Email && x.Id != id, ct);
+                    if (dup)
+                        return this.FAIL(StatusCodes.Status409Conflict, "Email đã tồn tại.");
+                    e.Email = req.Email.Trim();
+                }
+
+                // CCCD (unique)
+                if (!string.IsNullOrWhiteSpace(req.Cccd))
+                {
+                    var dup = await _db.Employees.AnyAsync(x => x.Cccd == req.Cccd && x.Id != id, ct);
+                    if (dup)
+                        return this.FAIL(StatusCodes.Status409Conflict, "CCCD đã tồn tại.");
+                    e.Cccd = req.Cccd.Trim();
+                }
+
+                // Phone (unique)
+                if (!string.IsNullOrWhiteSpace(req.Phone))
+                {
+                    var dup = await _db.Employees.AnyAsync(x => x.Phone == req.Phone && x.Id != id, ct);
+                    if (dup)
+                        return this.FAIL(StatusCodes.Status409Conflict, "Số điện thoại đã tồn tại.");
+                    e.Phone = req.Phone.Trim();
+                }
+
+                // Address
+                if (!string.IsNullOrWhiteSpace(req.Address))
+                    e.Address = req.Address.Trim();
+
+                // Gender, Status, Dates
+                if (req.Gender.HasValue)
+                    e.Gender = req.Gender.Value;
+
+                if (req.Status.HasValue)
+                    e.Status = req.Status.Value;
+
+                if (req.Dob.HasValue)
+                    e.Dob = req.Dob;
+
+                if (req.HireDate.HasValue)
+                    e.HireDate = req.HireDate.Value;
+
+                // Department
+                if (req.DepartmentId.HasValue)
+                {
+                    bool depExists = await _db.Departments.AnyAsync(d => d.Id == req.DepartmentId, ct);
+                    if (!depExists)
+                        return this.FAIL(StatusCodes.Status404NotFound, "Phòng ban không tồn tại.");
+                    e.DepartmentId = req.DepartmentId;
+                }
+
+                // Position
+                if (req.PositionId.HasValue)
+                {
+                    bool posExists = await _db.Positions.AnyAsync(p => p.Id == req.PositionId, ct);
+                    if (!posExists)
+                        return this.FAIL(StatusCodes.Status404NotFound, "Chức vụ không tồn tại.");
+                    e.PositionId = req.PositionId;
+                }
+
+                // ==== UPLOAD FILE AVATAR (nếu có) ====
+                if (avatarFile != null && avatarFile.Length > 0)
+                {
+                    var allowed = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
+                    var ext = Path.GetExtension(avatarFile.FileName).ToLowerInvariant();
+                    if (!allowed.Contains(ext))
+                        return this.FAIL(StatusCodes.Status400BadRequest, "Định dạng file không hợp lệ. Chỉ chấp nhận JPG, PNG, GIF, WEBP.");
+
+                    var uploadRoot = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "avatars");
+                    Directory.CreateDirectory(uploadRoot);
+
+                    // Xoá ảnh cũ nếu có
+                    if (!string.IsNullOrWhiteSpace(e.AvatarUrl))
                     {
-                        JsonValueKind.Null => null,
-                        JsonValueKind.String => string.IsNullOrWhiteSpace(prop.GetString()) ? null : prop.GetString()!.Trim(),
-                        _ => null
-                    };
-
-                static Guid? GetGuidOrNull(JsonElement prop)
-                {
-                    if (prop.ValueKind == JsonValueKind.Null) return null;
-                    if (prop.ValueKind == JsonValueKind.String && Guid.TryParse(prop.GetString(), out var g)) return g;
-                    return null;
-                }
-
-                static bool TryGetDateOnly(JsonElement prop, out DateOnly? value)
-                {
-                    value = null;
-                    if (prop.ValueKind == JsonValueKind.Null) return true;
-                    if (prop.ValueKind == JsonValueKind.String && DateOnly.TryParse(prop.GetString(), out var d)) { value = d; return true; }
-                    return false;
-                }
-
-                static bool TryGetInt(JsonElement prop, out int? value)
-                {
-                    value = null;
-                    if (prop.ValueKind == JsonValueKind.Null) return true;
-                    if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var i)) { value = i; return true; }
-                    if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var j)) { value = j; return true; }
-                    return false;
-                }
-
-                // --- Code (unique, non-empty) ---
-                if (body.TryGetProperty("code", out var codeProp))
-                {
-                    var newCode = GetStringOrNull(codeProp);
-                    if (string.IsNullOrWhiteSpace(newCode))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "Mã nhân viên không được để trống.");
-
-                    var duplicate = await _db.Employees.AnyAsync(x => x.Code == newCode && x.Id != id, ct);
-                    if (duplicate)
-                        return this.FAIL(StatusCodes.Status409Conflict, $"Mã nhân viên '{newCode}' đã tồn tại.");
-
-                    e.Code = newCode!;
-                }
-
-                // --- FullName (non-empty) ---
-                if (body.TryGetProperty("fullName", out var fullNameProp))
-                {
-                    var newFullName = GetStringOrNull(fullNameProp);
-                    if (string.IsNullOrWhiteSpace(newFullName))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "Họ tên không được để trống.");
-                    e.FullName = newFullName!;
-                }
-
-                // --- Email (unique, non-empty) ---
-                if (body.TryGetProperty("email", out var emailProp))
-                {
-                    var newEmail = GetStringOrNull(emailProp);
-                    if (string.IsNullOrWhiteSpace(newEmail))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "Email không được để trống.");
-
-                    if (!string.Equals(e.Email, newEmail, StringComparison.OrdinalIgnoreCase))
-                    {
-                        var dup = await _db.Employees.AnyAsync(x => x.Email == newEmail, ct);
-                        if (dup) return this.FAIL(StatusCodes.Status409Conflict, "Email đã tồn tại.");
-                        e.Email = newEmail!;
-                    }
-                }
-
-                // --- CCCD (unique, allow null to clear) ---
-                if (body.TryGetProperty("cccd", out var cccdProp))
-                {
-                    var newCccd = GetStringOrNull(cccdProp);
-                    if (!string.Equals(e.Cccd ?? "", newCccd ?? "", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (!string.IsNullOrWhiteSpace(newCccd))
+                        try
                         {
-                            var dup = await _db.Employees.AnyAsync(x => x.Cccd == newCccd, ct);
-                            if (dup) return this.FAIL(StatusCodes.Status409Conflict, "CCCD đã tồn tại.");
+                            var oldFile = Path.GetFileName(new Uri(e.AvatarUrl, UriKind.RelativeOrAbsolute).LocalPath);
+                            var oldPath = Path.Combine(uploadRoot, oldFile);
+                            if (System.IO.File.Exists(oldPath))
+                                System.IO.File.Delete(oldPath);
                         }
-                        e.Cccd = newCccd;
+                        catch { /* bỏ qua lỗi xóa file */ }
                     }
-                }
 
-                // --- Phone (unique, allow null to clear) ---
-                if (body.TryGetProperty("phone", out var phoneProp))
-                {
-                    var newPhone = GetStringOrNull(phoneProp);
-                    if (!string.Equals(e.Phone ?? "", newPhone ?? "", StringComparison.OrdinalIgnoreCase))
-                    {
-                        if (!string.IsNullOrWhiteSpace(newPhone))
-                        {
-                            var dup = await _db.Employees.AnyAsync(x => x.Phone == newPhone, ct);
-                            if (dup) return this.FAIL(StatusCodes.Status409Conflict, "Phone đã tồn tại.");
-                        }
-                        e.Phone = newPhone;
-                    }
-                }
+                    // Lưu ảnh mới
+                    var fileName = $"{id:N}_{DateTime.UtcNow:yyyyMMddHHmmss}{ext}";
+                    var fullPath = Path.Combine(uploadRoot, fileName);
 
-                // --- Address (allow null) ---
-                if (body.TryGetProperty("address", out var addrProp))
-                    e.Address = GetStringOrNull(addrProp);
+                    using (var stream = new FileStream(fullPath, FileMode.Create))
+                        await avatarFile.CopyToAsync(stream, ct);
 
-                // --- AvatarUrl (allow null) ---
-                if (body.TryGetProperty("avatarUrl", out var avatarProp))
-                    e.AvatarUrl = GetStringOrNull(avatarProp);
-
-                // --- Gender (enum) ---
-                if (body.TryGetProperty("gender", out var genderProp))
-                {
-                    if (!TryGetInt(genderProp, out var newGender))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "gender phải là số hoặc null.");
-                    if (newGender.HasValue && (newGender < 0 || newGender > 2))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "Giá trị gender không hợp lệ.");
-                    if (newGender.HasValue) e.Gender = (Gender)newGender.Value;
-                }
-
-                // --- Status (enum) ---
-                if (body.TryGetProperty("status", out var statusProp))
-                {
-                    if (!TryGetInt(statusProp, out var newStatus))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "status phải là số hoặc null.");
-                    if (newStatus.HasValue && (newStatus < 0 || newStatus > 5))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "Giá trị status không hợp lệ.");
-                    if (newStatus.HasValue) e.Status = (EmployeeStatus)newStatus.Value;
-                }
-
-                // --- Dob (DateOnly) ---
-                if (body.TryGetProperty("dob", out var dobProp))
-                {
-                    if (!TryGetDateOnly(dobProp, out var newDob))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "dob phải là 'yyyy-MM-dd' hoặc null.");
-                    e.Dob = newDob;
-                }
-
-                // --- HireDate (DateOnly) ---
-                if (body.TryGetProperty("hireDate", out var hireProp))
-                {
-                    if (!TryGetDateOnly(hireProp, out var newHire))
-                        return this.FAIL(StatusCodes.Status400BadRequest, "hireDate phải là 'yyyy-MM-dd' hoặc null.");
-                    if (newHire.HasValue) e.HireDate = newHire.Value;
-                }
-
-                // --- DepartmentId ---
-                if (body.TryGetProperty("departmentId", out var depProp))
-                {
-                    var newDepId = GetGuidOrNull(depProp);
-                    if (depProp.ValueKind != JsonValueKind.Null && newDepId is null)
-                        return this.FAIL(StatusCodes.Status400BadRequest, "departmentId phải là GUID hoặc null.");
-
-                    if (newDepId != e.DepartmentId)
-                    {
-                        if (newDepId.HasValue)
-                        {
-                            var depExists = await _db.Departments.AnyAsync(d => d.Id == newDepId.Value, ct);
-                            if (!depExists) return this.FAIL(StatusCodes.Status404NotFound, "Phòng ban không tồn tại.");
-                        }
-                        e.DepartmentId = newDepId;
-                    }
-                }
-
-                // --- PositionId ---
-                if (body.TryGetProperty("positionId", out var posProp))
-                {
-                    var newPosId = GetGuidOrNull(posProp);
-                    if (posProp.ValueKind != JsonValueKind.Null && newPosId is null)
-                        return this.FAIL(StatusCodes.Status400BadRequest, "positionId phải là GUID hoặc null.");
-
-                    if (newPosId != e.PositionId)
-                    {
-                        if (newPosId.HasValue)
-                        {
-                            var posExists = await _db.Positions.AnyAsync(p => p.Id == newPosId.Value, ct);
-                            if (!posExists) return this.FAIL(StatusCodes.Status404NotFound, "Chức vụ không tồn tại.");
-                        }
-                        e.PositionId = newPosId;
-                    }
+                    var baseUrl = $"{Request.Scheme}://{Request.Host}";
+                    e.AvatarUrl = $"{baseUrl}/uploads/avatars/{fileName}";
                 }
 
                 await _db.SaveChangesAsync(ct);
@@ -2973,6 +3570,11 @@ namespace DeTaiNhanSu.Controllers
                     // Không chặn nghiệp vụ nếu gửi mail lỗi
                 }
 
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "EmployeeChanged",
+                    new { action = "update", data = dto },
+                    ct);
+
                 return StatusCode(StatusCodes.Status200OK, new
                 {
                     statusCode = StatusCodes.Status200OK,
@@ -3005,6 +3607,11 @@ namespace DeTaiNhanSu.Controllers
 
                 _db.Employees.Remove(e);
                 await _db.SaveChangesAsync(ct);
+
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "EmployeeChanged",
+                    new { action = "delete", data = new { id = id } },
+                    ct);
 
                 return this.OK(message: "Xoá nhân viên thành công.");
             }
@@ -3213,6 +3820,73 @@ namespace DeTaiNhanSu.Controllers
                     return username;
             }
             throw new InvalidOperationException("Không thể tạo username duy nhất.");
+        }
+
+        [HttpPost("{id:guid}/upload-avatar")]
+        [Authorize]
+        public async Task<IActionResult> UploadAvatar(Guid id, IFormFile file, CancellationToken ct)
+        {
+            try
+            {
+                if (file == null || file.Length == 0)
+                    return this.FAIL(StatusCodes.Status400BadRequest, "Không có file nào được tải lên.");
+
+                var employee = await _db.Employees.FirstOrDefaultAsync(x => x.Id == id, ct);
+                if (employee is null)
+                    return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy nhân viên.");
+
+                // --- Kiểm tra định dạng ảnh ---
+                var allowed = new[] { ".jpg", ".jpeg", ".png", ".gif", ".webp" };
+                var ext = Path.GetExtension(file.FileName).ToLowerInvariant();
+                if (!allowed.Contains(ext))
+                    return this.FAIL(StatusCodes.Status400BadRequest, "Định dạng file không hợp lệ. Chỉ chấp nhận JPG, PNG, GIF, WEBP.");
+
+                // --- Tạo thư mục lưu ---
+                var uploadRoot = Path.Combine(Directory.GetCurrentDirectory(), "wwwroot", "uploads", "avatars");
+                if (!Directory.Exists(uploadRoot))
+                    Directory.CreateDirectory(uploadRoot);
+
+                // --- Tạo tên file an toàn ---
+                //var safeFileName = $"{id:N}{ext}";
+
+                var safeFileName = $"{id:N}_{DateTime.UtcNow:yyyyMMddHHmmss}{ext}";
+
+                var fullPath = Path.Combine(uploadRoot, safeFileName);
+
+                // --- Lưu file ---
+                using (var stream = new FileStream(fullPath, FileMode.Create))
+                {
+                    await file.CopyToAsync(stream, ct);
+                }
+
+                // --- Tạo URL public (dựa trên cấu hình host của bạn) ---
+                var baseUrl = $"{Request.Scheme}://{Request.Host}";
+                var relativePath = $"/uploads/avatars/{safeFileName}";
+                var publicUrl = $"{baseUrl}{relativePath}";
+
+                // --- Cập nhật DB ---
+                employee.AvatarUrl = publicUrl;
+                await _db.SaveChangesAsync(ct);
+
+                return Ok(new
+                {
+                    statusCode = StatusCodes.Status200OK,
+                    message = "Tải ảnh lên thành công.",
+                    data = new[]
+                    {
+                new {
+                    employeeId = id,
+                    avatarUrl = publicUrl
+                }
+            },
+                    success = true
+                });
+            }
+            catch (Exception ex)
+            {
+
+                return this.FAIL(StatusCodes.Status500InternalServerError, $"Lỗi khi tải ảnh: {ex.Message}");
+            }
         }
 
         private static string GenerateTempPassword(int length = 14)

@@ -2,9 +2,11 @@
 using DeTaiNhanSu.Common;
 using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos;
+using DeTaiNhanSu.Hubs;
 using DeTaiNhanSu.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace DeTaiNhanSu.Controllers
@@ -174,7 +176,14 @@ namespace DeTaiNhanSu.Controllers
 
         // follow schema
         private readonly AppDbContext _db;
-        public DepartmentController(AppDbContext db) => _db = db;
+
+        private readonly IHubContext<NotificationNewHub> _hubContext;
+
+        public DepartmentController(AppDbContext db, IHubContext<NotificationNewHub> hubContext)
+        {
+            _db = db;
+            _hubContext = hubContext;
+        }
 
         // GET /api/department?...
         //[HttpGet]
@@ -469,6 +478,11 @@ namespace DeTaiNhanSu.Controllers
                     EmployeesCount = d.Employees.Count
                 };
 
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "DepartmentChanged",
+                    new { action = "create", data = dto },
+                    ct);
+
                 // 5) Trả 201 với FULL đối tượng theo schema
                 return StatusCode(StatusCodes.Status201Created, new
                 {
@@ -691,6 +705,11 @@ namespace DeTaiNhanSu.Controllers
                     EmployeesCount = d.Employees.Count
                 };
 
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "DepartmentChanged",
+                    new { action = "update", data = dto },
+                    ct);
+
                 // 200 theo schema: data.result = dto
                 return StatusCode(StatusCodes.Status200OK, new
                 {
@@ -730,6 +749,11 @@ namespace DeTaiNhanSu.Controllers
 
                 _db.Departments.Remove(dep);
                 await _db.SaveChangesAsync(ct);
+
+                await _hubContext.Clients.Group("HR_Admins").SendAsync(
+                    "DepartmentChanged",
+                    new { action = "delete", data = new { id = id } },
+                    ct);
 
                 return this.OK(message: "Xoá phòng ban thành công.");
             }

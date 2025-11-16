@@ -41,6 +41,7 @@ namespace DeTaiNhanSu.Controllers
                 var query = _db.RewardPenalties
                     .AsNoTracking()
                     .Include(x => x.Type) // để lọc kind + lấy DefaultAmount/Name
+                    .Include(x => x.Employee)
                     .AsQueryable();
 
                 if (employeeId is not null) query = query.Where(x => x.EmployeeId == employeeId);
@@ -68,6 +69,8 @@ namespace DeTaiNhanSu.Controllers
                     {
                         Id = x.Id,
                         EmployeeId = x.EmployeeId,
+                        EmployeeFullName = x.Employee != null ? x.Employee.FullName : null,
+                        EmployeeAvatarUrl = x.Employee != null ? x.Employee.AvatarUrl : null,
                         TypeId = x.TypeId,
                         TypeName = x.Type != null ? x.Type.Name : null,
                         Kind = x.Type.Type.ToString(),

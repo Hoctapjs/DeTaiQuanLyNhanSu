@@ -4,6 +4,8 @@
     {
         public Guid Id { get; set; }
         public Guid EmployeeId { get; set; }
+        public string? EmployeeFullName { get; set; }
+        public string? EmployeeAvatarUrl { get; set; }
         public Guid TypeId { get; set; }
         public string? TypeName { get; set; }
         public string? Kind { get; set; }                 // enum -> int

@@ -39,6 +39,10 @@ namespace DeTaiNhanSu.DbContextProject
 
         public DbSet<GlobalSetting> GlobalSettings => Set<GlobalSetting>();
 
+        public DbSet<CourseResult> CourseResults => Set<CourseResult>();
+        public DbSet<CourseQuestion> CourseQuestions => Set<CourseQuestion>();
+
+
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
@@ -238,6 +242,49 @@ namespace DeTaiNhanSu.DbContextProject
 
                 // Cấu hình độ dài cho Key
                 gs.Property(x => x.Key).HasMaxLength(100).IsRequired();
+            });
+
+
+
+            // bổ sung course result
+            modelBuilder.Entity<CourseResult>(b =>
+            {
+                b.ToTable("CourseResults");
+                b.HasKey(x => new { x.EmployeeId, x.CourseId, x.QuestionId });
+
+                b.Property(x => x.Chosen).HasMaxLength(1).IsRequired();
+
+                b.Property(x => x.IsCorrect).IsRequired();
+
+                b.Property(x => x.AnsweredAt).HasDefaultValueSql("SYSUTCDATETIME()");
+
+                b.HasOne(x => x.Question)
+                 .WithMany()
+                 .HasForeignKey(x => x.QuestionId)
+                 .OnDelete(DeleteBehavior.Cascade);
+
+                b.HasOne(x => x.Course)
+                .WithMany()
+                .HasForeignKey(x => x.CourseId)
+                .OnDelete(DeleteBehavior.NoAction);
+
+            });
+
+            modelBuilder.Entity<Course>(b =>
+            {
+                b.Property(x => x.ClassCode)
+                 .HasMaxLength(50);                 // để nullable nếu dùng filtered index
+
+                // Unique filtered index: cho phép NULL/rỗng, nhưng nếu có thì phải duy nhất
+                b.HasIndex(x => x.ClassCode)
+                 .IsUnique()
+                 .HasFilter("[ClassCode] IS NOT NULL AND [ClassCode] <> ''");
+
+                b.Property(x => x.CreatedAt)
+                 .HasDefaultValueSql("SYSUTCDATETIME()");
+
+                b.Property(x => x.PassThreshold)
+                 .HasDefaultValue(70);
             });
         }
     }
