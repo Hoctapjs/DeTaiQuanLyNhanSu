@@ -1,6 +1,7 @@
 ﻿using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Models;
 using DeTaiNhanSu.Services.Notification;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System.Linq.Dynamic.Core; // <--- THÊM USING NÀY
@@ -190,10 +191,73 @@ namespace DeTaiNhanSu.Controllers
             }
         }
 
-        // =================================================================
-        // CÁC PHẦN CÒN LẠI CỦA CONTROLLER (GIỮ NGUYÊN)
-        // =================================================================
 
+        // ==========================================================
+        // API UPDATE VỚI RÀNG BUỘC VÀ STATUSCODE (Giữ nguyên)
+        // (Giờ hàm này sẽ không báo lỗi `_notificationService` nữa)
+        // ==========================================================
+        [HttpPut("{id}")]
+        [Authorize(Roles = "Admin")]
+        public async Task<IActionResult> UpdateNotification(Guid id, [FromBody] UpdateNotificationRequest request)
+        {
+            try
+            {
+                // Ràng buộc: Title/Content luôn bắt buộc
+                if (string.IsNullOrWhiteSpace(request.Title) || string.IsNullOrWhiteSpace(request.Content))
+                {
+                    return BadRequest(new { Success = false, StatusCode = 400, Message = "Yêu cầu thất bại: Title và Content không được để trống." });
+                }
+
+                // === GỌI HÀM "THÔNG MINH" DUY NHẤT ===
+                // Service sẽ tự động xử lý logic (Ưu tiên UserId, bỏ qua TargetUserIds)
+                var result = await _notificationService.UpdateNotificationAsync(id, request);
+
+                if (!result)
+                {
+                    return NotFound(new
+                    {
+                        Success = false,
+                        StatusCode = 404,
+                        Message = $"Không tìm thấy thông báo (ID: {id}) hoặc liên kết người dùng (User: {request.UserId})."
+                    });
+                }
+
+                return Ok(new { Success = true, StatusCode = 200, Message = "Cập nhật thông báo thành công." });
+            }
+            catch (DbUpdateException dbEx)
+            {
+                return StatusCode(500, new { Success = false, StatusCode = 500, Message = $"Lỗi cơ sở dữ liệu: {dbEx.InnerException?.Message ?? dbEx.Message}" });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Success = false, StatusCode = 500, Message = $"Đã xảy ra lỗi máy chủ nội bộ: {ex.Message}" });
+            }
+        }
+        // ==========================================================
+        // API DELETE VỚI RÀNG BUỘC VÀ STATUSCODE (Giữ nguyên)
+        // (Giờ hàm này sẽ không báo lỗi `_notificationService` nữa)
+        // ==========================================================
+        [HttpDelete("{id}/user/{userId}")]
+        [Authorize] // Sẽ hết lỗi
+        public async Task<IActionResult> DeleteNotificationForUser(Guid id, Guid userId)
+        {
+            try
+            {
+                // Hàm này giờ đã tồn tại trên Interface, sẽ hết lỗi
+                var result = await _notificationService.DeleteUserNotificationAsync(id, userId);
+
+                if (!result)
+                {
+                    return NotFound(new { Success = false, StatusCode = 404, Message = $"Không tìm thấy thông báo (ID: {id}) được gán cho người dùng (ID: {userId})" });
+                }
+
+                return Ok(new { Success = true, StatusCode = 200, Message = "Xóa thông báo cho người dùng thành công." });
+            }
+            catch (Exception ex)
+            {
+                return StatusCode(500, new { Success = false, StatusCode = 500, Message = $"Đã xảy ra lỗi máy chủ nội bộ: {ex.Message}" });
+            }
+        }
         // Endpoint để tạo thông báo HR tùy chỉnh
         [HttpPost("create-hr")]
         public async Task<IActionResult> CreateHRNotification([FromBody] CreateNotificationRequest request)
@@ -444,5 +508,22 @@ namespace DeTaiNhanSu.Controllers
         public string Title { get; set; } = default!;
         public string Content { get; set; } = default!;
         public List<Guid>? TargetUserIds { get; set; }
+    }
+    // ✅ THÊM DTO CHO REQUEST UPDATE
+    public class UpdateNotificationRequest
+    {
+        // Bắt buộc
+        public string Title { get; set; } = string.Empty;
+        public string Content { get; set; } = string.Empty;
+
+        // Tùy chọn (nếu null, service sẽ bỏ qua và giữ giá trị cũ)
+        public string? Type { get; set; }
+        public Guid? ActorId { get; set; }
+        public string? ActionUrl { get; set; }
+
+        // Tùy chọn (nếu null, service sẽ bỏ qua và giữ nguyên)
+        // Nếu là list rỗng [], service sẽ xóa hết người nhận
+        public List<Guid>? TargetUserIds { get; set; }
+        public Guid? UserId { get; set; }
     }
 }

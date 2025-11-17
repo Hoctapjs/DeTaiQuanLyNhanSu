@@ -22,7 +22,7 @@
 //        }
 
 //        [HttpGet]
-//        [Authorize(Roles = "HR, Admin")]
+//       //[Authorize(Roles = "HR, Admin")]
 //        public async Task<IActionResult> Search(
 //            [FromQuery] string? q,
 //            [FromQuery] int current = 1,
@@ -90,7 +90,7 @@
 //        }
 
 //        [HttpGet("{id:guid}")]
-//        [Authorize(Roles = "HR, Admin")]
+//       //[Authorize(Roles = "HR, Admin")]
 //        public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
 //        {
 //            try
@@ -118,7 +118,7 @@
 //        }
 
 //        [HttpPost]
-//        [Authorize(Roles = "HR, Admin")]
+//       //[Authorize(Roles = "HR, Admin")]
 //        public async Task<IActionResult> Create([FromBody] CreateCourseRequest req, CancellationToken ct)
 //        {
 //            try
@@ -164,7 +164,7 @@
 //        }
 
 //        [HttpPut("{id:guid}")]
-//        [Authorize(Roles = "HR, Admin")]
+//       //[Authorize(Roles = "HR, Admin")]
 //        public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCourseRequest req, CancellationToken ct)
 //        {
 //            try
@@ -211,7 +211,7 @@
 //        }
 
 //        [HttpDelete("{id:guid}")]
-//        [Authorize(Roles = "HR, Admin")]
+//       //[Authorize(Roles = "HR, Admin")]
 //        public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
 //        {
 //            try
@@ -262,7 +262,7 @@ namespace DeTaiNhanSu.Controllers
         public CourseController(AppDbContext db) => _db = db;
 
         [HttpGet]
-        [Authorize(Roles = "HR, Admin")]
+       //[Authorize(Roles = "HR, Admin")]
         public async Task<IActionResult> Search(
             [FromQuery] string? q,
             [FromQuery] int current = 1,
@@ -330,7 +330,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpGet("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+       //[Authorize(Roles = "HR, Admin")]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
             try
@@ -360,7 +360,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpPost]
-        [Authorize(Roles = "HR, Admin")]
+       //[Authorize(Roles = "HR, Admin")]
         public async Task<IActionResult> Create([FromBody] CreateCourseRequest req, CancellationToken ct)
         {
             try
@@ -426,7 +426,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpPut("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+       //[Authorize(Roles = "HR, Admin")]
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCourseRequest req, CancellationToken ct)
         {
             try
@@ -476,7 +476,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpDelete("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+       //[Authorize(Roles = "HR, Admin")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
             try
