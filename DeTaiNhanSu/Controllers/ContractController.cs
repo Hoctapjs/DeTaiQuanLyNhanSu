@@ -257,7 +257,7 @@ namespace DeTaiNhanSu.Controllers
                         //  <p>Ngày hết hạn mới: <b>{c.EndDate:yyyy-MM-dd}</b></p>
                         //  <p>Trạng thái: {c.Status}</p>";
                         // Các biến dùng chung
-                        string hrmUrl = "https://google.com";
+                        //string hrmUrl = "https://google.com";
                         string helpEmail = "support@huynhthanhson.io.vn";
                         string companyName = "Công Ty TNHH NPS";
                         string companyAddress = "140 Lê Trọng Tấn, Tây Thạnh, Tân Phú";
@@ -887,7 +887,7 @@ namespace DeTaiNhanSu.Controllers
                         var subject = $"[HRM] Chấm dứt hợp đồng: {c.ContractNumber}";
 
                         // Biến chung
-                        string hrmUrl = "https://google.com";
+                        //string hrmUrl = "https://google.com";
                         string helpEmail = "support@huynhthanhson.io.vn";
                         string companyName = "Công Ty TNHH NPS";
                         string companyAddress = "140 Lê Trọng Tấn, Tây Thạnh, Tân Phú";

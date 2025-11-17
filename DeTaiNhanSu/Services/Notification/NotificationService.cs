@@ -1,9 +1,11 @@
-﻿using DeTaiNhanSu.DbContextProject;
-using DeTaiNhanSu.Services.Hubs;
-using DeTaiNhanSu.Models;
+﻿using DeTaiNhanSu.Controllers;
+using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Enums;
+using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services.Hubs;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
+using System.Linq;
 
 namespace DeTaiNhanSu.Services.Notification
 {
@@ -219,6 +221,170 @@ namespace DeTaiNhanSu.Services.Notification
             };
 
             await SendHRNotificationAsync(notification, targetUserIds);
+        }
+        // ==========================================================
+        // ✅ HÀM UPDATE "THÔNG MINH" (ĐÃ BỔ SUNG GỬI FCM)
+        // ==========================================================
+        public async Task<bool> UpdateNotificationAsync(Guid notificationId, UpdateNotificationRequest request)
+        {
+            // LOGIC PHÂN LUỒNG: Ưu tiên UserId
+            if (request.UserId.HasValue)
+            {
+                // ===============================================
+                // TRƯỜNG HỢP 1: CÓ UserId -> "Tạo bản sao" (Clone)
+                // ===============================================
+                if (request.TargetUserIds != null)
+                {
+                    Console.WriteLine($"CẢNH BÁO (UpdateNotificationAsync): Cả UserId ({request.UserId.Value}) và TargetUserIds được cung cấp. " +
+                                      $"Hệ thống sẽ ƯU TIÊN UserId và BỎ QUA TargetUserIds.");
+                }
+
+                // (Logic "Tạo bản sao" - Xóa cũ, Thêm mới)
+                var oldUserNotificationLink = await _context.UserNotifications
+                    .FirstOrDefaultAsync(un => un.NotificationId == notificationId && un.UserId == request.UserId.Value);
+                if (oldUserNotificationLink == null) return false;
+                var originalNotification = await _context.Notifications
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(n => n.Id == notificationId);
+                if (originalNotification == null) return false;
+                var newNotification = new Models.Notification
+                {
+                    Id = Guid.NewGuid(),
+                    Title = request.Title,
+                    Content = request.Content,
+                    Type = request.Type ?? originalNotification.Type,
+                    ActorId = request.ActorId ?? originalNotification.ActorId,
+                    ActionUrl = request.ActionUrl,
+                    CreatedAt = GetVietnamTime()
+                };
+
+                _context.Notifications.Add(newNotification);
+                _context.UserNotifications.Remove(oldUserNotificationLink);
+                _context.UserNotifications.Add(new UserNotification
+                {
+                    NotificationId = newNotification.Id,
+                    UserId = request.UserId.Value,
+                    ReadAt = null
+                });
+
+                await _context.SaveChangesAsync();
+
+                // 7. Gửi thông báo (SignalR + Firebase)
+                string userIdString = request.UserId.Value.ToString();
+                var device = await _context.DeviceStatuses.FirstOrDefaultAsync(d => d.DeviceId == userIdString);
+
+                if (device != null && device.IsAppOpen && !string.IsNullOrEmpty(device.ConnectionId))
+                {
+                    // 7a. Gửi SignalR (App đang mở)
+                    await _hubContext.Clients.Client(device.ConnectionId).SendAsync("ReceiveNotificationUpdate", newNotification);
+                }
+                else
+                {
+                    // 7b. ✅ GỬI FIREBASE (App đang đóng hoặc không tìm thấy device status)
+                    var fcmTokens = await _context.FcmTokens
+                        .Where(t => t.UserId == userIdString && !string.IsNullOrEmpty(t.Token))
+                        .Select(t => t.Token)
+                        .ToListAsync();
+
+                    if (fcmTokens.Any())
+                    {
+                        Console.WriteLine($"🔥 Đang gửi FCM (Update User-Specific) đến: {userIdString}");
+                        await _firebaseService.SendNotificationAsync(newNotification, fcmTokens);
+                    }
+                }
+                return true;
+            }
+            else
+            {
+                // ===============================================
+                // TRƯỜNG HỢP 2: KHÔNG CÓ UserId -> Update (Admin)
+                // ===============================================
+                var notification = await _context.Notifications.FindAsync(notificationId);
+                if (notification == null) return false;
+
+                // (Logic cập nhật thông báo gốc và TargetUserIds của bạn)
+                notification.Title = request.Title;
+                notification.Content = request.Content;
+                // ... (cập nhật các trường khác) ...
+                if (request.TargetUserIds != null)
+                {
+                    // ... (logic sync list của bạn) ...
+                }
+                await _context.SaveChangesAsync();
+
+                // 4. Lấy TẤT CẢ user liên quan
+                var allInvolvedUserIds = await _context.UserNotifications
+                    .Where(un => un.NotificationId == notificationId)
+                    .Select(un => un.UserId)
+                    .Distinct()
+                    .ToListAsync();
+
+                if (!allInvolvedUserIds.Any()) return true; // Không có ai để gửi
+
+                var allInvolvedUserIdStrings = allInvolvedUserIds.Select(g => g.ToString()).ToList();
+
+                // 5. Gửi SignalR (App đang mở)
+                var openDevices = await _context.DeviceStatuses
+                    .Where(d => allInvolvedUserIdStrings.Contains(d.DeviceId) && d.IsAppOpen)
+                    .Select(d => d.ConnectionId)
+                    .ToListAsync();
+
+                if (openDevices.Any())
+                {
+                    await _hubContext.Clients.Clients(openDevices).SendAsync("ReceiveNotificationUpdate", notification);
+                }
+
+                // 6. ✅ GỬI FIREBASE (App đang đóng)
+                var closedDeviceUserIds = await _context.DeviceStatuses
+                    .Where(d => allInvolvedUserIdStrings.Contains(d.DeviceId) && !d.IsAppOpen)
+                    .Select(d => d.DeviceId) // Lấy UserId (string)
+                    .ToListAsync();
+
+                if (closedDeviceUserIds.Any())
+                {
+                    var closedTokens = await _context.FcmTokens
+                        .Where(t => closedDeviceUserIds.Contains(t.UserId) && !string.IsNullOrEmpty(t.Token))
+                        .Select(t => t.Token)
+                        .ToListAsync();
+
+                    if (closedTokens.Any())
+                    {
+                        Console.WriteLine($"🔥 Đang gửi FCM (Update Admin) đến {closedTokens.Count} thiết bị đang đóng...");
+                        await _firebaseService.SendNotificationAsync(notification, closedTokens);
+                    }
+                }
+                return true;
+            }
+        }
+
+        // ==========================================================
+        // SỬA ĐỔI HÀM DELETE (Thêm Task<bool> và return)
+        // ==========================================================
+        public async Task<bool> DeleteUserNotificationAsync(Guid notificationId, Guid userId)
+        {
+            var userNotification = await _context.UserNotifications
+                .FirstOrDefaultAsync(un => un.NotificationId == notificationId && un.UserId == userId);
+
+            // ✅ THÊM DÒNG NÀY:
+            if (userNotification == null) return false; // Trả về false nếu không tìm thấy
+
+            // 1. Xóa khỏi Database
+            _context.UserNotifications.Remove(userNotification);
+            await _context.SaveChangesAsync();
+
+            // 2. Gửi SignalR (Logic này của bạn đã đúng)
+            string userIdString = userId.ToString();
+            var device = await _context.DeviceStatuses
+                .FirstOrDefaultAsync(d => d.DeviceId == userIdString && d.IsAppOpen);
+
+            if (device != null && !string.IsNullOrEmpty(device.ConnectionId))
+            {
+                await _hubContext.Clients.Client(device.ConnectionId)
+                    .SendAsync("ReceiveNotificationDelete", notificationId);
+            }
+
+            // ✅ THÊM DÒNG NÀY:
+            return true; // Trả về true khi thành công
         }
     }
 }
