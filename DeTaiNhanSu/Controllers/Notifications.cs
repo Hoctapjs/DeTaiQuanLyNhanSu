@@ -29,6 +29,147 @@ namespace DeTaiNhanSu.Controllers
             _notificationService = notificationService;
             _context = context;
         }
+        // =================================================================
+        // ✅ API MỚI: LẤY DANH SÁCH TỪ BẢNG NOTIFICATIONS (BẢNG GỐC)
+        // =================================================================
+        [HttpGet] // Đặt một tên route mới
+        [Authorize(Roles = "Admin")] // (Đề xuất: Chỉ Admin nên xem bảng gốc này)
+        public async Task<IActionResult> GetRootNotifications(
+            [FromQuery] string? q,
+            [FromQuery] int current = 1,
+            [FromQuery] int pageSize = 20,
+            [FromQuery] string sort = "CreatedAt desc") // Sắp xếp theo ngày tạo mới nhất
+        {
+            try
+            {
+                // 1. Base Query: Chỉ truy vấn bảng Notifications
+                var initialQuery = _context.Notifications
+                                        .Include(n => n.Actor)
+                                            .ThenInclude(a => a.Employee)
+                                        .AsQueryable();
+
+                IQueryable<NotificationModel> query = initialQuery;
+
+                // 2. Filtering (Lọc)
+                if (!string.IsNullOrEmpty(q))
+                {
+                    string searchTrimmed = q.Trim();
+                    string searchLower = searchTrimmed.ToLower();
+                    bool isGuid = Guid.TryParse(searchTrimmed, out Guid searchGuid);
+
+                    query = query.Where(n =>
+                        // Tìm bằng ID (nếu q là Guid)
+                        (isGuid && n.Id == searchGuid) ||
+
+                        // Tìm bằng văn bản
+                        n.Title.ToLower().Contains(searchLower) ||
+                        n.Content.ToLower().Contains(searchLower) ||
+                        n.Type.ToLower().Contains(searchLower) ||
+
+                        // Tìm bằng tên người tạo (Actor)
+                        (n.Actor != null && n.Actor.Employee != null &&
+                         n.Actor.Employee.FullName.ToLower().Contains(searchLower))
+                    );
+
+                    // Bắt lỗi nếu không tìm thấy gì (giống hàm cũ)
+                    if (await initialQuery.AnyAsync() && !await query.AnyAsync())
+                    {
+                        return BadRequest(new
+                        {
+                            statusCode = 400,
+                            message = $"Không tìm thấy thông báo nào cho từ khóa '{searchTrimmed}'.",
+                            success = false
+                        });
+                    }
+                }
+
+                // 3. Pagination (Phân trang)
+                var totalCount = await query.CountAsync();
+                var totalPages = (int)Math.Ceiling(totalCount / (double)pageSize);
+
+                List<dynamic> notificationList = new List<dynamic>();
+
+                // 4. Sorting & Selection (Sắp xếp & Lấy dữ liệu)
+                try
+                {
+                    // Xử lý các alias (bí danh) cho sort
+                    string sortQuery = sort;
+                    if (sortQuery.Contains("actorName", StringComparison.OrdinalIgnoreCase))
+                    {
+                        sortQuery = sortQuery.Replace("actorName", "Actor.Employee.FullName", StringComparison.OrdinalIgnoreCase);
+                    }
+                    if (sortQuery.Contains("Id", StringComparison.OrdinalIgnoreCase))
+                    {
+                        sortQuery = sortQuery.Replace("Id", "CreatedAt", StringComparison.OrdinalIgnoreCase);
+                    }
+
+                    var tempList = await query
+                        .OrderBy(sortQuery) // Dùng System.Linq.Dynamic.Core
+                        .Skip((current - 1) * pageSize)
+                        .Take(pageSize)
+                        .Select(n => new // Định hình dữ liệu trả về
+                        {
+                            id = n.Id,
+                            type = n.Type,
+                            title = n.Title,
+                            content = n.Content,
+                            createdAt = n.CreatedAt,
+                            actorId = n.ActorId,
+                            actorName = (n.Actor != null && n.Actor.Employee != null)
+                                        ? n.Actor.Employee.FullName
+                                        : (n.ActorId == null ? "System" : "Unknown"),
+                            actionUrl = n.ActionUrl
+                            // Lưu ý: Không có 'readAt' hoặc 'userId' vì đây là bảng gốc
+                        })
+                        .ToListAsync();
+
+                    notificationList.AddRange(tempList.Cast<dynamic>());
+                }
+                // Bắt lỗi sắp xếp (giống hàm cũ)
+                catch (ParseException)
+                {
+                    string supportedFields = "Hỗ trợ sắp xếp theo: CreatedAt (hoặc Id), Title, Type, actorName.";
+                    return BadRequest(new
+                    {
+                        statusCode = 400,
+                        message = $"Lỗi sắp xếp: Tên cột '{sort}' không hợp lệ. {supportedFields}",
+                        success = false
+                    });
+                }
+
+                // 5. Trả về cấu trúc (giống hàm cũ)
+                return Ok(new
+                {
+                    statusCode = 200,
+                    message = $"Tìm thấy {totalCount} thông báo.",
+                    data = new[]
+                    {
+                        new
+                        {
+                            meta = new
+                            {
+                                current = current,
+                                pageSize = pageSize,
+                                pages = totalPages,
+                                total = totalCount
+                            },
+                            result = notificationList
+                        }
+                    },
+                    success = true
+                });
+            }
+            // Bắt lỗi chung (ngoại lệ)
+            catch (Exception ex)
+            {
+                return StatusCode(500, new
+                {
+                    Success = false,
+                    StatusCode = 500,
+                    Message = $"Đã xảy ra lỗi máy chủ nội bộ: {ex.Message}"
+                });
+            }
+        } // Kết thúc hàm GetRootNotifications
 
         // =================================================================
         // PHẦN SỬA LỖI [HttpGet("list")]
