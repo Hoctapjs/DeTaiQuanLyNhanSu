@@ -373,32 +373,8 @@ namespace DeTaiNhanSu.Controllers
             {
                 return StatusCode(500, new { Success = false, StatusCode = 500, Message = $"Đã xảy ra lỗi máy chủ nội bộ: {ex.Message}" });
             }
-        }
-        // ==========================================================
-        // API DELETE VỚI RÀNG BUỘC VÀ STATUSCODE (Giữ nguyên)
-        // (Giờ hàm này sẽ không báo lỗi `_notificationService` nữa)
-        // ==========================================================
-        [HttpDelete("{id}/user/{userId}")]
-        [Authorize] // Sẽ hết lỗi
-        public async Task<IActionResult> DeleteNotificationForUser(Guid id, Guid userId)
-        {
-            try
-            {
-                // Hàm này giờ đã tồn tại trên Interface, sẽ hết lỗi
-                var result = await _notificationService.DeleteUserNotificationAsync(id, userId);
-
-                if (!result)
-                {
-                    return NotFound(new { Success = false, StatusCode = 404, Message = $"Không tìm thấy thông báo (ID: {id}) được gán cho người dùng (ID: {userId})" });
-                }
-
-                return Ok(new { Success = true, StatusCode = 200, Message = "Xóa thông báo cho người dùng thành công." });
-            }
-            catch (Exception ex)
-            {
-                return StatusCode(500, new { Success = false, StatusCode = 500, Message = $"Đã xảy ra lỗi máy chủ nội bộ: {ex.Message}" });
-            }
-        }
+        }  
+       
         // Endpoint để tạo thông báo HR tùy chỉnh
         [HttpPost("create-hr")]
         public async Task<IActionResult> CreateHRNotification([FromBody] CreateNotificationRequest request)
@@ -667,4 +643,5 @@ namespace DeTaiNhanSu.Controllers
         public List<Guid>? TargetUserIds { get; set; }
         public Guid? UserId { get; set; }
     }
+
 }

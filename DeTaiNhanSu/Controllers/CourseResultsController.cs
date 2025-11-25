@@ -315,7 +315,7 @@ public class CourseResultsController : ControllerBase
     //}
 
     //[HttpPost("bulk-submit")]
-    //[Authorize(Roles = "HR, Admin")]
+    [Authorize(Roles = "HR, Admin")]
     //public async Task<IActionResult> BulkSubmit([FromBody] List<SubmitAnswerRequest> reqs, CancellationToken ct)
     //{
     //    if (reqs is null || reqs.Count == 0)
@@ -474,7 +474,7 @@ public class CourseResultsController : ControllerBase
 
     // GET /api/courseresults/score?employeeId=&courseId=&updateTrainingRecord=false
     //[HttpGet("score")]
-    //[Authorize(Roles = "HR, Admin")]
+    [Authorize(Roles = "HR, Admin")]
     //public async Task<IActionResult> GetScore(
     //    [FromQuery] Guid employeeId,
     //    [FromQuery] Guid courseId,
