@@ -145,6 +145,9 @@ namespace DeTaiNhanSu.Controllers
                 // 3) Lấy đầy đủ user + employee + role
                 var u = await _db.Users
                     .Include(x => x.Employee)
+                    .ThenInclude(x => x.Department)
+                    .Include(x => x.Employee)
+                    .ThenInclude(x => x.Position)
                     .Include(x => x.Role)
                     .FirstAsync(x => x.Id == userId, ct);
 
@@ -188,7 +191,9 @@ namespace DeTaiNhanSu.Controllers
                                 address = u.Employee.Address,
                                 hire_date = u.Employee.HireDate,
                                 department_id = u.Employee.DepartmentId,
+                                department_name = u.Employee.Department.Name,
                                 position_id = u.Employee.PositionId,
+                                position_name = u.Employee.Position.Name,
                                 status = u.Employee.Status.ToString().ToLower(),
                                 avatar_url = u.Employee.AvatarUrl
                             },
