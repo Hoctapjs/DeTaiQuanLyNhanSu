@@ -14,6 +14,7 @@
 
         //public int? Hours { get; set; }
         public ICollection<CourseQuestion> Questions { get; set; } = new List<CourseQuestion>();
+        public ICollection<TrainingRecord> TrainingRecords { get; set; } = new List<TrainingRecord>();
 
     }
 }

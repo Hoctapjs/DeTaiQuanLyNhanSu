@@ -23,6 +23,8 @@ namespace DeTaiNhanSu.Models
         public Position? Position { get; set; }
         public User? User { get; set; }
         public ICollection<Attendance> Attendances { get; set; } = [];
+        public ICollection<TrainingRecord> TrainingRecords { get; set; } = new List<TrainingRecord>();
+
 
     }
 }

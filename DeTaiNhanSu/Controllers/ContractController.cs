@@ -25,7 +25,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpGet]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Search(
             [FromQuery] string? q,
             [FromQuery] Guid? employeeId,
@@ -144,7 +144,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpGet("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         //[HasPermission("Contracts.View")]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
@@ -190,7 +190,7 @@ namespace DeTaiNhanSu.Controllers
 
         // POST /api/contract
         [HttpPost]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         //[HasPermission("Contracts.Manage")]
         public async Task<IActionResult> Create([FromBody] CreateContractRequest req, CancellationToken ct)
         {
@@ -418,7 +418,7 @@ namespace DeTaiNhanSu.Controllers
 
         // PUT /api/contracts/{id}
         [HttpPut("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         //[HasPermission("Contracts.Manage")]
         public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
         {
@@ -704,7 +704,7 @@ namespace DeTaiNhanSu.Controllers
 
         // DELETE /api/contract/{id}
         [HttpDelete("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         //[HasPermission("Contracts.Manage")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
@@ -731,7 +731,7 @@ namespace DeTaiNhanSu.Controllers
 
         // gia hạn -> cập nhật ngày hết hạn và trạng thái của hợp đồng
         [HttpPost("{id:guid}/renew")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         //[HasPermission("Contracts.Manage")]
         public async Task<IActionResult> Renew(Guid id, [FromBody] RenewContractRequest req, CancellationToken ct)
         {
@@ -859,7 +859,7 @@ namespace DeTaiNhanSu.Controllers
 
         // chấm dứt -> đánh dấu hợp đồng đã chấm dứt
         [HttpPost("{id:guid}/terminate")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Terminate(Guid id, [FromBody] TerminateContractRequest req, CancellationToken ct)
         {
             try
@@ -974,7 +974,7 @@ namespace DeTaiNhanSu.Controllers
 
         // danh sách sắp hết hạn -> trả về danh sách các hợp đồng sẽ hết hạn trong 30 ngày
         [HttpGet("expiring")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         //[HasPermission("Contracts.View")]
         public async Task<IActionResult> GetExpiring([FromQuery] int withinDays = 30, [FromQuery] int page = 1, [FromQuery] int pageSize = 20, CancellationToken ct = default)
         {

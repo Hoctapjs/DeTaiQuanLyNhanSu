@@ -5,6 +5,7 @@ namespace DeTaiNhanSu.Dtos
     public class EmployeeDto
     {
         public Guid Id { get; set; }
+        public Guid? UserId { get; set; }
         public string Code { get; set; } = default!;
         public string FullName { get; set; } = default!;
         public Gender? Gender { get; set; }

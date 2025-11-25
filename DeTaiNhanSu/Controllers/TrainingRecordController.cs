@@ -311,7 +311,7 @@ namespace DeTaiNhanSu.Controllers
         public TrainingRecordController(AppDbContext db) => _db = db;
 
         [HttpGet]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Search(
             [FromQuery] Guid? employeeId,
             [FromQuery] Guid? courseId,
@@ -401,7 +401,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpGet("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
             try
@@ -439,152 +439,8 @@ namespace DeTaiNhanSu.Controllers
             }
         }
 
-        //[HttpPost]
-        //[Authorize(Roles = "HR, Admin")]
-        //public async Task<IActionResult> Create([FromBody] CreateTrainingRecordRequest req, CancellationToken ct)
-        //{
-        //    try
-        //    {
-        //        if (!ModelState.IsValid)
-        //            return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
-
-        //        if (!await _db.Employees.AnyAsync(e => e.Id == req.EmployeeId, ct))
-        //            return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại.");
-
-        //        if (!await _db.Courses.AnyAsync(c => c.Id == req.CourseId, ct))
-        //            return this.FAIL(StatusCodes.Status404NotFound, "Khóa học không tồn tại.");
-
-        //        if (req.EvaluatedBy is not null &&
-        //            !await _db.Users.AnyAsync(u => u.Id == req.EvaluatedBy, ct))
-        //            return this.FAIL(StatusCodes.Status404NotFound, "Người đánh giá không tồn tại.");
-
-        //        if (req.Score is < 0 or > 100)
-        //            return this.FAIL(StatusCodes.Status400BadRequest, "Score phải trong khoảng 0..100.");
-
-        //        var tr = new TrainingRecord
-        //        {
-        //            Id = Guid.NewGuid(),
-        //            EmployeeId = req.EmployeeId,
-        //            CourseId = req.CourseId,
-        //            Score = req.Score,
-        //            Status = req.Status ?? TrainingStatus.in_progress,
-        //            EvaluatedBy = req.EvaluatedBy,
-        //            EvaluationNote = string.IsNullOrWhiteSpace(req.EvaluationNote) ? null : req.EvaluationNote.Trim()
-        //        };
-
-        //        _db.TrainingRecords.Add(tr);
-        //        await _db.SaveChangesAsync(ct);
-
-        //        return StatusCode(StatusCodes.Status201Created, new
-        //        {
-        //            statusCode = StatusCodes.Status201Created,
-        //            message = "Tạo hồ sơ đào tạo thành công.",
-        //            data = new { result = new { tr.Id } },
-        //            success = true
-        //        });
-        //    }
-        //    catch
-        //    {
-        //        return this.FAIL(StatusCodes.Status500InternalServerError, "Lỗi không xác định khi tạo hồ sơ đào tạo.");
-        //    }
-        //}
-
-        //[HttpPost]
-        //[Authorize(Roles = "HR, Admin")]
-        //public async Task<IActionResult> Create([FromBody] CreateTrainingRecordRequest req, CancellationToken ct)
-        //{
-        //    try
-        //    {
-        //        if (!ModelState.IsValid)
-        //            return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
-
-        //        // Tồn tại các thực thể?
-        //        var employeeExists = await _db.Employees.AnyAsync(e => e.Id == req.EmployeeId, ct);
-        //        if (!employeeExists) return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại.");
-
-        //        var course = await _db.Courses.AsNoTracking().FirstOrDefaultAsync(c => c.Id == req.CourseId, ct);
-        //        if (course is null) return this.FAIL(StatusCodes.Status404NotFound, "Khóa học không tồn tại.");
-
-        //        if (req.EvaluatedBy is not null &&
-        //            !await _db.Users.AnyAsync(u => u.Id == req.EvaluatedBy, ct))
-        //            return this.FAIL(StatusCodes.Status404NotFound, "Người đánh giá không tồn tại.");
-
-        //        // ---- TÍNH ĐIỂM TỰ ĐỘNG ----
-        //        var totalQuestions = await _db.CourseQuestions
-        //            .AsNoTracking()
-        //            .CountAsync(q => q.CourseId == req.CourseId, ct);
-
-        //        // Nếu course chưa có câu hỏi → score = 0, in_progress (hoặc bạn có thể cho completed)
-        //        int answered = 0, correct = 0;
-        //        if (totalQuestions > 0)
-        //        {
-        //            answered = await _db.CourseResults
-        //                .AsNoTracking()
-        //                .CountAsync(r => r.EmployeeId == req.EmployeeId && r.CourseId == req.CourseId, ct);
-
-        //            correct = await _db.CourseResults
-        //                .AsNoTracking()
-        //                .CountAsync(r => r.EmployeeId == req.EmployeeId && r.CourseId == req.CourseId && r.IsCorrect, ct);
-        //        }
-
-        //        decimal scorePercent = 0m;
-        //        if (totalQuestions > 0)
-        //            scorePercent = Math.Round((decimal)correct / totalQuestions * 100m, 2);
-
-        //        // Quy tắc Status
-        //        var status = TrainingStatus.in_progress;
-        //        if (totalQuestions > 0 && answered >= totalQuestions)
-        //        {
-        //            status = (scorePercent >= course.PassThreshold)
-        //                ? TrainingStatus.completed    // Đạt
-        //                : TrainingStatus.failed;      // Không đạt
-        //        }
-
-        //        var tr = new TrainingRecord
-        //        {
-        //            Id = Guid.NewGuid(),
-        //            EmployeeId = req.EmployeeId,
-        //            CourseId = req.CourseId,
-        //            Score = scorePercent, // <- tự tính, không lấy từ request
-        //            Status = req.Status ?? status,   // cho phép override nếu muốn, hoặc dùng luôn 'status'
-        //            EvaluatedBy = req.EvaluatedBy,
-        //            EvaluationNote = string.IsNullOrWhiteSpace(req.EvaluationNote) ? null : req.EvaluationNote.Trim()
-        //        };
-
-        //        _db.TrainingRecords.Add(tr);
-        //        await _db.SaveChangesAsync(ct);
-
-        //        // trả về theo schema của bạn
-        //        return StatusCode(StatusCodes.Status201Created, new
-        //        {
-        //            statusCode = StatusCodes.Status201Created,
-        //            message = "Tạo hồ sơ đào tạo thành công (điểm được tính tự động).",
-        //            data = new
-        //            {
-        //                result = new
-        //                {
-        //                    tr.Id,
-        //                    tr.EmployeeId,
-        //                    tr.CourseId,
-        //                    tr.Score,
-        //                    tr.Status,
-        //                    totalQuestions,
-        //                    answered,
-        //                    correct,
-        //                    passThreshold = course.PassThreshold
-        //                }
-        //            },
-        //            success = true
-        //        });
-        //    }
-        //    catch
-        //    {
-        //        return this.FAIL(StatusCodes.Status500InternalServerError, "Lỗi không xác định khi tạo hồ sơ đào tạo.");
-        //    }
-        //}
-
         [HttpPost]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Create([FromBody] CreateTrainingRecordRequest req, CancellationToken ct)
         {
             try
@@ -683,7 +539,7 @@ namespace DeTaiNhanSu.Controllers
 
 
         [HttpPut("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateTrainingRecordRequest req, CancellationToken ct)
         {
             try
@@ -726,7 +582,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpDelete("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
             try

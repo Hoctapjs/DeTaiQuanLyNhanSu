@@ -19,7 +19,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= GET: /api/insuranceprofiles?employeeId=&hasBhxh=&hasBhyt=&hasBhtn=&current=&pageSize=&sort=
         [HttpGet]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Search(
             [FromQuery] Guid? employeeId,
             [FromQuery] bool? hasBhxh,
@@ -107,7 +107,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= GET: /api/insuranceprofiles/all?employeeId=&hasBhxh=&hasBhyt=&hasBhtn=&sort=
         [HttpGet("all")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> GetAll(
             [FromQuery] Guid? employeeId,
             [FromQuery] bool? hasBhxh,
@@ -191,7 +191,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= GET: /api/insuranceprofiles/{id}
         [HttpGet("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
             try
@@ -251,7 +251,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= POST: /api/insuranceprofiles
         [HttpPost]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Create([FromBody] CreateInsuranceProfileRequest req, CancellationToken ct)
         {
             try
@@ -313,7 +313,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= PUT (partial): /api/insuranceprofiles/{id}
         [HttpPut("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
         {
             try
@@ -418,7 +418,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= DELETE: /api/insuranceprofiles/{id}
         [HttpDelete("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
             try

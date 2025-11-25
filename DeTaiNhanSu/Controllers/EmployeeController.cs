@@ -1202,8 +1202,8 @@ namespace DeTaiNhanSu.Controllers
         //}
 
         [HttpGet]
-        [HasPermission("Employees.View")]
-        [Authorize(Roles = "HR, Admin")]
+        //[HasPermission("Employees.View")]
+        [Authorize(Roles = "HR, Admin, Manager")]
         public async Task<IActionResult> Search(
     [FromQuery] string? q,
     [FromQuery] EmployeeStatus? status,
@@ -1223,6 +1223,7 @@ namespace DeTaiNhanSu.Controllers
                     .AsNoTracking()
                     .Include(x => x.Department)
                     .Include(x => x.Position)
+                    .Include(x => x.User)
                     .AsQueryable();
 
                 if (!string.IsNullOrWhiteSpace(q))
@@ -1257,6 +1258,7 @@ namespace DeTaiNhanSu.Controllers
                     .Select(x => new EmployeeDto
                     {
                         Id = x.Id,
+                        UserId = x.User.Id,
                         Code = x.Code,
                         FullName = x.FullName,
                         Gender = x.Gender,
@@ -1293,8 +1295,8 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpGet("all")]
-        [HasPermission("Employees.View")]
-        [Authorize(Roles = "HR, Admin")]
+        //[HasPermission("Employees.View")]
+        [Authorize(Roles = "HR, Admin, Manager")]
         public async Task<IActionResult> GetAll(
     [FromQuery] string? q,
     [FromQuery] EmployeeStatus? status,
@@ -1772,7 +1774,7 @@ namespace DeTaiNhanSu.Controllers
         //    }
 
         [HttpGet("filter")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Admin, Manager")]
         public async Task<IActionResult> SelectiveSearch(
     // chọn cột trả về (nếu bỏ trống -> trả full)
     [FromQuery] string? fields,
@@ -2038,7 +2040,8 @@ namespace DeTaiNhanSu.Controllers
 
 
         [HttpGet("GetEmployeeById")]
-        [HasPermission("Employees.View")]
+        //[HasPermission("Employees.View")]
+        [Authorize(Roles = "HR, Admin, Manager")]
         public async Task<IActionResult> GetEmployeeById(Guid id, CancellationToken ct)
         {
             try

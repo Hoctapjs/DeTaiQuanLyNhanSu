@@ -322,6 +322,27 @@ namespace DeTaiNhanSu.DbContextProject
                 b.Property(x => x.PassThreshold)
                  .HasDefaultValue(70);
             });
+
+            modelBuilder.Entity<TrainingRecord>(entity =>
+            {
+                // 1. Fix quan hệ với COURSE
+                entity.HasOne(tr => tr.Course)              // TrainingRecord có 1 Course
+                      .WithMany(c => c.TrainingRecords)     // Course có nhiều TrainingRecord
+                      .HasForeignKey(tr => tr.CourseId)     // BẮT BUỘC dùng cột CourseId
+                      .OnDelete(DeleteBehavior.Restrict);   // (Tùy chọn) Chặn xóa Course nếu đã có dữ liệu
+
+                // 2. Fix quan hệ với EMPLOYEE (Vì bạn cũng bị lỗi EmployeeId1)
+                entity.HasOne(tr => tr.Employee)            // TrainingRecord có 1 Employee
+                      .WithMany(e => e.TrainingRecords)     // Employee có nhiều TrainingRecord
+                      .HasForeignKey(tr => tr.EmployeeId)   // BẮT BUỘC dùng cột EmployeeId
+                      .OnDelete(DeleteBehavior.Restrict);
+
+                // 3. Fix quan hệ với USER (Người đánh giá)
+                entity.HasOne(tr => tr.EvaluatedByUser)
+                      .WithMany()                           // User có thể không cần list TrainingRecords -> để trống
+                      .HasForeignKey(tr => tr.EvaluatedBy)
+                      .OnDelete(DeleteBehavior.SetNull);
+            });
         }
     }
 }

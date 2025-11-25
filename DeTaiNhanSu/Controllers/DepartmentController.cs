@@ -246,7 +246,7 @@ namespace DeTaiNhanSu.Controllers
 
         [HttpGet]
         //[HasPermission("Departments.View")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Search(
     [FromQuery] string? q,
     [FromQuery] int current = 1,
@@ -312,7 +312,7 @@ namespace DeTaiNhanSu.Controllers
 
         [HttpGet("all-id-name")]
         //[HasPermission("Departments.View")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetAllDepartments([FromQuery] string? q, CancellationToken ct = default)
         {
             try
@@ -351,7 +351,7 @@ namespace DeTaiNhanSu.Controllers
         // GET /api/department/{id}
         [HttpGet("{id:guid}")]
         //[HasPermission("Departments.View")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
             try
@@ -625,7 +625,7 @@ namespace DeTaiNhanSu.Controllers
         //}
 
         [HttpPut("{id:guid}")]
-        [Authorize(Roles = "HR")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
         {
             try

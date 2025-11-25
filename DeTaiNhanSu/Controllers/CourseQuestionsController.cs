@@ -19,7 +19,7 @@ namespace DeTaiNhanSu.Controllers
         // endpoint mẫu
         // GET /api/coursequestions?courseId=&q=&current=&pageSize=&sort=Content|-Content
         [HttpGet]
-       //[Authorize(Roles = "HR, Admin")]
+       [Authorize]
         public async Task<IActionResult> Search(
             [FromQuery] Guid? courseId,
             [FromQuery] string? q,
@@ -95,7 +95,7 @@ namespace DeTaiNhanSu.Controllers
 
         // GET /api/coursequestions/{id}
         [HttpGet("{id:guid}")]
-       //[Authorize(Roles = "HR, Admin")]
+       [Authorize]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
             try
@@ -131,7 +131,7 @@ namespace DeTaiNhanSu.Controllers
 
         // POST /api/coursequestions
         [HttpPost]
-       //[Authorize(Roles = "HR, Admin")]
+       [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Create([FromBody] CreateCourseQuestionRequest req, CancellationToken ct)
         {
             try
@@ -196,7 +196,7 @@ namespace DeTaiNhanSu.Controllers
         // PUT /api/coursequestions/{id}
         // Cập nhật từng phần qua JSON object
         [HttpPut("{id:guid}")]
-       //[Authorize(Roles = "HR, Admin")]
+       [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCourseQuestionRequest req, CancellationToken ct)
         {
             try
@@ -260,7 +260,7 @@ namespace DeTaiNhanSu.Controllers
 
         // DELETE /api/coursequestions/{id}
         [HttpDelete("{id:guid}")]
-       //[Authorize(Roles = "HR, Admin")]
+       [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
             try
