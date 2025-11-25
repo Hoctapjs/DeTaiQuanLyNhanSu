@@ -20,7 +20,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= GET: /api/rewardpenalties?employeeId=&typeId=&kind=&from=&to=&decidedBy=&current=&pageSize=&sort=
         [HttpGet]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Search(
             [FromQuery] Guid? employeeId,
             [FromQuery] Guid? typeId,
@@ -102,7 +102,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= GET: /api/rewardpenalties/all?employeeId=&typeId=&kind=&from=&to=&decidedBy=&sort=
         [HttpGet("all")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetAll(
             [FromQuery] Guid? employeeId,
             [FromQuery] Guid? typeId,
@@ -165,7 +165,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= GET: /api/rewardpenalties/{id}
         [HttpGet("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
             try
@@ -203,7 +203,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= POST: /api/rewardpenalties
         [HttpPost]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Create([FromBody] CreateRewardPenaltyRequest req, CancellationToken ct)
         {
             try
@@ -287,7 +287,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= PUT (partial): /api/rewardpenalties/{id}
         [HttpPut("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
         {
             try
@@ -435,7 +435,7 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= DELETE: /api/rewardpenalties/{id}
         [HttpDelete("{id:guid}")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
             try

@@ -22,7 +22,7 @@ namespace DeTaiNhanSu.Controllers
         // ========= GET: /api/rewardpenaltytypes?current=&pageSize=&q=&type=&level=&form=&sort=
         [HttpGet]
         //[HasPermission("RewardPenaltyTypes.View")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Search(
             [FromQuery] string? q,
             [FromQuery] RewardPenaltyKind? type,
@@ -99,7 +99,7 @@ namespace DeTaiNhanSu.Controllers
         // ========= GET: /api/rewardpenaltytypes/all?q=&type=&level=&form=&sort=
         [HttpGet("all")]
         //[HasPermission("RewardPenaltyTypes.View")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetAll(
             [FromQuery] string? q,
             [FromQuery] RewardPenaltyKind? type,
@@ -160,7 +160,7 @@ namespace DeTaiNhanSu.Controllers
         // ========= GET: /api/rewardpenaltytypes/{id}
         [HttpGet("{id:guid}")]
         //[HasPermission("RewardPenaltyTypes.View")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
             try
@@ -193,7 +193,7 @@ namespace DeTaiNhanSu.Controllers
         // ========= POST: /api/rewardpenaltytypes
         [HttpPost]
         //[HasPermission("RewardPenaltyTypes.Manage")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Create([FromBody] CreateRewardPenaltyTypeRequest req, CancellationToken ct)
         {
             try
@@ -255,7 +255,7 @@ namespace DeTaiNhanSu.Controllers
         // ========= PUT (partial): /api/rewardpenaltytypes/{id}
         [HttpPut("{id:guid}")]
         //[HasPermission("RewardPenaltyTypes.Manage")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
         {
             try
@@ -499,7 +499,7 @@ namespace DeTaiNhanSu.Controllers
         // ========= DELETE: /api/rewardpenaltytypes/{id}
         [HttpDelete("{id:guid}")]
         //[HasPermission("RewardPenaltyTypes.Manage")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
             try

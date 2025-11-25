@@ -23,8 +23,14 @@ using DeTaiNhanSu.Hubs;
 // đặt alias nếu muốn, hoặc bỏ alias và dùng trực tiếp AuditActionFilter
 using AuditActionFilter = DeTaiNhanSu.Services.Log.AuditActionFilter;
 using Microsoft.Extensions.Options;
+using QuestPDF.Infrastructure;
+
+QuestPDF.Settings.License = LicenseType.Community;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Http Client cho pdf report
+builder.Services.AddHttpClient();
 
 // ==== Audit DI ====
 builder.Services.AddHttpContextAccessor();
@@ -148,7 +154,7 @@ builder.Services
                 // Chỉ lấy token khi request đi vào Hub
                 var path = context.HttpContext.Request.Path;
                 if (!string.IsNullOrEmpty(accessToken) &&
-                    (path.StartsWithSegments("/notificationHub")))
+                    ((path.StartsWithSegments("/notificationHub")) || (path.StartsWithSegments("/notificationHubTable"))))
                 {
                     context.Token = accessToken;
                 }
@@ -229,6 +235,8 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI();
     app.MapOpenApi(); // nếu bạn đang dùng OpenAPI v8 (tùy gói)
 }
+
+app.UseRouting();
 
 app.UseHttpsRedirection();
 app.UseCors("DevCors");

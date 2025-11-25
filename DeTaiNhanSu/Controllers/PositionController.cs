@@ -217,7 +217,7 @@ namespace DeTaiNhanSu.Controllers
 
         [HttpGet]
         //[HasPermission("Positions.View")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Search(
     [FromQuery] string? q,
     [FromQuery] int current = 1,
@@ -282,7 +282,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpGet("all-id-name")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetAllPositions(
     [FromQuery] string? q,
     [FromQuery] string? sort = "Name",
@@ -332,7 +332,7 @@ namespace DeTaiNhanSu.Controllers
         // GET /api/position/{id}
         [HttpGet("{id:guid}")]
         //[HasPermission("Positions.View")]
-        [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> GetById(Guid id, CancellationToken ct)
         {
             try

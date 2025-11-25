@@ -250,6 +250,7 @@ using DeTaiNhanSu.Dtos.CourseDtoFol;
 using DeTaiNhanSu.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace DeTaiNhanSu.Controllers
@@ -261,14 +262,83 @@ namespace DeTaiNhanSu.Controllers
         private readonly AppDbContext _db;
         public CourseController(AppDbContext db) => _db = db;
 
+        // [HttpGet]
+        ////[Authorize(Roles = "HR, Admin")]
+        // public async Task<IActionResult> Search(
+        //     [FromQuery] string? q,
+        //     [FromQuery] int current = 1,
+        //     [FromQuery] int pageSize = 20,
+        //     [FromQuery] string? sort = "Name",
+        //     CancellationToken ct = default)
+        // {
+        //     try
+        //     {
+        //         if (current < 1) current = 1;
+        //         if (pageSize is < 1 or > 200) pageSize = 20;
+
+        //         var query = _db.Courses.AsNoTracking().AsQueryable();
+
+        //         if (!string.IsNullOrWhiteSpace(q))
+        //         {
+        //             q = q.Trim();
+        //             query = query.Where(x =>
+        //                 x.Name.Contains(q) ||
+        //                 x.ClassCode.Contains(q));
+        //         }
+
+        //         query = sort?.Trim() switch
+        //         {
+        //             "-Name" => query.OrderByDescending(x => x.Name),
+        //             "ClassCode" => query.OrderBy(x => x.ClassCode),
+        //             "-ClassCode" => query.OrderByDescending(x => x.ClassCode),
+        //             "PassThreshold" => query.OrderBy(x => x.PassThreshold),
+        //             "-PassThreshold" => query.OrderByDescending(x => x.PassThreshold),
+        //             "CreatedAt" => query.OrderBy(x => x.CreatedAt),
+        //             "-CreatedAt" => query.OrderByDescending(x => x.CreatedAt),
+        //             _ => query.OrderBy(x => x.Name)
+        //         };
+
+        //         var total = await query.CountAsync(ct);
+
+        //         var result = await query
+        //             .Skip((current - 1) * pageSize)
+        //             .Take(pageSize)
+        //             .Select(x => new CourseDto
+        //             {
+        //                 Id = x.Id,
+        //                 Name = x.Name,
+        //                 ClassCode = x.ClassCode,
+        //                 PassThreshold = x.PassThreshold,
+        //                 CreatedAt = x.CreatedAt,
+        //                 QuestionCount = x.Questions.Count
+        //             })
+        //             .ToListAsync(ct);
+
+        //         var meta = new
+        //         {
+        //             current,
+        //             pageSize,
+        //             pages = (int)Math.Ceiling(total / (double)pageSize),
+        //             total
+        //         };
+
+        //         return this.OKSingle(new { meta, result }, total > 0 ? $"Tìm thấy {total} khóa học." : "Không có kết quả.");
+        //     }
+        //     catch
+        //     {
+        //         return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi khi tìm kiếm khóa học.");
+        //     }
+        // }
+
         [HttpGet]
        [Authorize(Roles = "HR, Admin")]
         public async Task<IActionResult> Search(
-            [FromQuery] string? q,
-            [FromQuery] int current = 1,
-            [FromQuery] int pageSize = 20,
-            [FromQuery] string? sort = "Name",
-            CancellationToken ct = default)
+    [FromQuery] string? q,
+    [FromQuery] Guid? employeeId, 
+    [FromQuery] int current = 1,
+    [FromQuery] int pageSize = 20,
+    [FromQuery] string? sort = "Name",
+    CancellationToken ct = default)
         {
             try
             {
@@ -277,6 +347,7 @@ namespace DeTaiNhanSu.Controllers
 
                 var query = _db.Courses.AsNoTracking().AsQueryable();
 
+                // --- LỌC THEO TỪ KHÓA ---
                 if (!string.IsNullOrWhiteSpace(q))
                 {
                     q = q.Trim();
@@ -285,6 +356,17 @@ namespace DeTaiNhanSu.Controllers
                         x.ClassCode.Contains(q));
                 }
 
+                
+
+                // --- 2. LỌC THEO TRAINING RECORD (EMPLOYEE ID) ---
+                if (employeeId.HasValue)
+                {
+                    // Logic: Chọn Course (x) nếu trong danh sách TrainingRecords của nó (x.TrainingRecords)
+                    // có bất kỳ bản ghi nào (Any) khớp với employeeId truyền vào.
+                    query = query.Where(x => x.TrainingRecords.Any(tr => tr.EmployeeId == employeeId));
+                }
+
+                // --- SORTING ---
                 query = sort?.Trim() switch
                 {
                     "-Name" => query.OrderByDescending(x => x.Name),
@@ -323,9 +405,10 @@ namespace DeTaiNhanSu.Controllers
 
                 return this.OKSingle(new { meta, result }, total > 0 ? $"Tìm thấy {total} khóa học." : "Không có kết quả.");
             }
-            catch
+            catch (Exception ex)
             {
-                return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi khi tìm kiếm khóa học.");
+                // Log lỗi ra để debug nếu cần
+                return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi: " + ex.Message);
             }
         }
 
@@ -360,7 +443,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpPost]
-       [Authorize(Roles = "HR, Admin")]
+       [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Create([FromBody] CreateCourseRequest req, CancellationToken ct)
         {
             try
@@ -425,58 +508,135 @@ namespace DeTaiNhanSu.Controllers
             }
         }
 
+        // [HttpPut("{id:guid}")]
+        ////[Authorize(Roles = "HR, Admin")]
+        // public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCourseRequest req, CancellationToken ct)
+        // {
+        //     try
+        //     {
+        //         var c = await _db.Courses.FirstOrDefaultAsync(x => x.Id == id, ct);
+        //         if (c is null)
+        //             return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy khóa học.");
+
+        //         if (!ModelState.IsValid)
+        //             return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
+
+        //         if (!string.IsNullOrWhiteSpace(req.Name))
+        //         {
+        //             var newName = req.Name.Trim();
+        //             c.Name = newName;
+        //         }
+
+        //         if (!string.IsNullOrWhiteSpace(req.ClassCode))
+        //         {
+        //             var newCode = req.ClassCode.Trim();
+        //             if (!string.Equals(c.ClassCode, newCode, StringComparison.OrdinalIgnoreCase) &&
+        //                 await _db.Courses.AnyAsync(x => x.ClassCode == newCode, ct))
+        //                 return this.FAIL(StatusCodes.Status409Conflict, "ClassCode đã tồn tại.");
+
+        //             c.ClassCode = newCode;
+        //         }
+
+        //         if (req.PassThreshold.HasValue)
+        //         {
+        //             var pass = req.PassThreshold.Value;
+        //             if (pass is < 0 or > 100)
+        //                 return this.FAIL(StatusCodes.Status400BadRequest, "PassThreshold phải trong khoảng 0..100.");
+        //             c.PassThreshold = pass;
+        //         }
+
+        //         await _db.SaveChangesAsync(ct);
+        //         return this.OK(message: "Cập nhật khóa học thành công.");
+        //     }
+        //     catch (DbUpdateConcurrencyException)
+        //     {
+        //         return this.FAIL(StatusCodes.Status409Conflict, "Xung đột cập nhật: bản ghi đã thay đổi trước đó.");
+        //     }
+        //     catch
+        //     {
+        //         return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi khi cập nhật khóa học.");
+        //     }
+        // }
+
         [HttpPut("{id:guid}")]
-       [Authorize(Roles = "HR, Admin")]
+        [Authorize(Roles = "Manager, HR")]
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateCourseRequest req, CancellationToken ct)
         {
             try
             {
+                // 1. Tìm bản ghi
                 var c = await _db.Courses.FirstOrDefaultAsync(x => x.Id == id, ct);
                 if (c is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy khóa học.");
 
-                if (!ModelState.IsValid)
-                    return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
+                // 2. VALIDATION & CẬP NHẬT TỪNG TRƯỜNG (Theo mẫu Employee)
 
+                // -- Name --
                 if (!string.IsNullOrWhiteSpace(req.Name))
                 {
-                    var newName = req.Name.Trim();
-                    c.Name = newName;
+                    c.Name = req.Name.Trim();
                 }
 
+                // -- ClassCode (Unique Check) --
                 if (!string.IsNullOrWhiteSpace(req.ClassCode))
                 {
                     var newCode = req.ClassCode.Trim();
-                    if (!string.Equals(c.ClassCode, newCode, StringComparison.OrdinalIgnoreCase) &&
-                        await _db.Courses.AnyAsync(x => x.ClassCode == newCode, ct))
-                        return this.FAIL(StatusCodes.Status409Conflict, "ClassCode đã tồn tại.");
+                    // Kiểm tra trùng lặp: Có bản ghi nào KHÁC id hiện tại mà trùng code không?
+                    var dup = await _db.Courses.AnyAsync(x => x.ClassCode == newCode && x.Id != id, ct);
+
+                    if (dup)
+                        return this.FAIL(StatusCodes.Status409Conflict, $"Mã lớp học '{newCode}' đã tồn tại.");
 
                     c.ClassCode = newCode;
                 }
 
+                // -- PassThreshold (Validation range) --
                 if (req.PassThreshold.HasValue)
                 {
                     var pass = req.PassThreshold.Value;
-                    if (pass is < 0 or > 100)
-                        return this.FAIL(StatusCodes.Status400BadRequest, "PassThreshold phải trong khoảng 0..100.");
+                    if (pass < 0 || pass > 100)
+                        return this.FAIL(StatusCodes.Status400BadRequest, "Điểm đạt phải trong khoảng 0..100.");
+
                     c.PassThreshold = pass;
                 }
 
+                // 3. Lưu thay đổi
                 await _db.SaveChangesAsync(ct);
-                return this.OK(message: "Cập nhật khóa học thành công.");
+
+                var fullCourse = await _db.Courses
+                    .AsNoTracking()
+                    .FirstAsync(x => x.Id == c.Id, ct);
+
+                var resultDto = new
+                {
+                    Id = fullCourse.Id,
+                    Name = fullCourse.Name,
+                    ClassCode = fullCourse.ClassCode,
+                    PassThreshold = fullCourse.PassThreshold,
+                };
+
+                // 6. Trả về Response chuẩn format
+                return StatusCode(StatusCodes.Status200OK, new
+                {
+                    statusCode = StatusCodes.Status200OK,
+                    message = "Cập nhật khóa học thành công.",
+                    data = new { result = resultDto },
+                    success = true
+                });
             }
             catch (DbUpdateConcurrencyException)
             {
-                return this.FAIL(StatusCodes.Status409Conflict, "Xung đột cập nhật: bản ghi đã thay đổi trước đó.");
+                return this.FAIL(StatusCodes.Status409Conflict, "Xung đột cập nhật: bản ghi đã thay đổi bởi người khác.");
             }
-            catch
+            catch (Exception ex)
             {
-                return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi khi cập nhật khóa học.");
+                // Log error ex here
+                return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi cập nhật khóa học.");
             }
         }
 
         [HttpDelete("{id:guid}")]
-       [Authorize(Roles = "HR, Admin")]
+       [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
         {
             try
