@@ -20,7 +20,7 @@ public class CourseResultsController : ControllerBase
 
     // GET /api/courseresults?employeeId=&courseId=&isCorrect=&from=&to=&current=&pageSize=&sort=AnsweredAt|-AnsweredAt
     [HttpGet]
-   //[Authorize(Roles = "HR, Admin")]
+   [Authorize(Roles = "HR, Admin")]
     public async Task<IActionResult> Search(
         [FromQuery] Guid? employeeId,
         [FromQuery] Guid? courseId,
@@ -169,7 +169,7 @@ public class CourseResultsController : ControllerBase
     //}
 
     [HttpPost("submit")]
-   //[Authorize(Roles = "HR, Admin")]
+   [Authorize(Roles = "HR, Admin")]
     public async Task<IActionResult> Submit([FromBody] SubmitAnswerRequest req, CancellationToken ct)
     {
         // Validate cơ bản
@@ -315,7 +315,7 @@ public class CourseResultsController : ControllerBase
     //}
 
     //[HttpPost("bulk-submit")]
-    //[Authorize(Roles = "HR, Admin")]
+    [Authorize(Roles = "HR, Admin")]
     //public async Task<IActionResult> BulkSubmit([FromBody] List<SubmitAnswerRequest> reqs, CancellationToken ct)
     //{
     //    if (reqs is null || reqs.Count == 0)
@@ -387,7 +387,7 @@ public class CourseResultsController : ControllerBase
     //}
 
     [HttpPost("bulk-submit")]
-   //[Authorize(Roles = "HR, Admin")]
+   [Authorize(Roles = "HR, Admin")]
     public async Task<IActionResult> BulkSubmit([FromBody] BulkSubmitRequest req, CancellationToken ct)
     {
         // --- Validate đầu vào cơ bản ---
@@ -474,7 +474,7 @@ public class CourseResultsController : ControllerBase
 
     // GET /api/courseresults/score?employeeId=&courseId=&updateTrainingRecord=false
     //[HttpGet("score")]
-    //[Authorize(Roles = "HR, Admin")]
+    [Authorize(Roles = "HR, Admin")]
     //public async Task<IActionResult> GetScore(
     //    [FromQuery] Guid employeeId,
     //    [FromQuery] Guid courseId,
@@ -554,7 +554,7 @@ public class CourseResultsController : ControllerBase
     //}
 
     [HttpGet("score")]
-   //[Authorize(Roles = "HR, Admin")]
+   [Authorize(Roles = "HR, Admin")]
     public async Task<IActionResult> GetScore([FromQuery] Guid employeeId, [FromQuery] Guid courseId, CancellationToken ct)
     {
         var course = await _db.Courses
@@ -605,7 +605,7 @@ public class CourseResultsController : ControllerBase
 
     // DELETE /api/courseresults/{employeeId}/{courseId}/{questionId}
     [HttpDelete("{employeeId:guid}/{courseId:guid}/{questionId:guid}")]
-   //[Authorize(Roles = "HR, Admin")]
+   [Authorize(Roles = "HR, Admin")]
     public async Task<IActionResult> Delete(Guid employeeId, Guid courseId, Guid questionId, CancellationToken ct)
     {
         try

@@ -10,6 +10,7 @@ using System.Linq.Dynamic.Core.Exceptions;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Globalization;
+using Microsoft.AspNetCore.Authorization;
 
 
 namespace DeTaiNhanSu.Controllers
@@ -41,6 +42,7 @@ namespace DeTaiNhanSu.Controllers
 
 
     [ApiController]
+    [Authorize]
     [Route("api/[controller]")]
     public class RequestController : ControllerBase
     {
@@ -70,6 +72,7 @@ namespace DeTaiNhanSu.Controllers
         // =================================================================
         // API 1: TẠO YÊU CẦU MỚI (POST)
         // =================================================================
+        
         [HttpPost]
         public async Task<IActionResult> CreateRequest([FromBody] CreateRequestSeparatedDto requestDto)
         {

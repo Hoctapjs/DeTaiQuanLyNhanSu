@@ -223,7 +223,7 @@ namespace DeTaiNhanSu.Services.Notification
             await SendHRNotificationAsync(notification, targetUserIds);
         }
         // ==========================================================
-        // ✅ HÀM UPDATE "THÔNG MINH" (ĐÃ BỔ SUNG GỬI FCM)
+        // ✅ HÀM UPDATE HOÀN CHỈNH (KHÔNG RESET ReadAt, CÓ SYNC TargetUserIds)
         // ==========================================================
         public async Task<bool> UpdateNotificationAsync(Guid notificationId, UpdateNotificationRequest request)
         {
@@ -232,6 +232,7 @@ namespace DeTaiNhanSu.Services.Notification
             {
                 // ===============================================
                 // TRƯỜNG HỢP 1: CÓ UserId -> "Tạo bản sao" (Clone)
+                // (Logic này đã hoàn chỉnh, giữ nguyên)
                 // ===============================================
                 if (request.TargetUserIds != null)
                 {
@@ -298,21 +299,68 @@ namespace DeTaiNhanSu.Services.Notification
             {
                 // ===============================================
                 // TRƯỜNG HỢP 2: KHÔNG CÓ UserId -> Update (Admin)
+                // (PHẦN ĐÃ HOÀN THIỆN)
                 // ===============================================
                 var notification = await _context.Notifications.FindAsync(notificationId);
                 if (notification == null) return false;
 
-                // (Logic cập nhật thông báo gốc và TargetUserIds của bạn)
+                // (Logic cập nhật thông báo gốc)
                 notification.Title = request.Title;
                 notification.Content = request.Content;
-                // ... (cập nhật các trường khác) ...
+                notification.Type = request.Type ?? notification.Type;
+                notification.ActorId = request.ActorId ?? notification.ActorId;
+                notification.ActionUrl = request.ActionUrl;
+
+                // (PHẦN RESET ReadAt ĐÃ BỊ XÓA THEO YÊU CẦU CỦA BẠN)
+
+                // ===============================================
+                // ✅ LOGIC SYNC LIST (PHẦN HOÀN CHỈNH)
+                // ===============================================
                 if (request.TargetUserIds != null)
                 {
-                    // ... (logic sync list của bạn) ...
+                    // Lấy danh sách liên kết user HIỆN TẠI
+                    var currentLinks = await _context.UserNotifications
+                        .Where(un => un.NotificationId == notificationId)
+                        .ToListAsync();
+
+                    var existingUserIds = currentLinks.Select(l => l.UserId).ToHashSet();
+                    var targetUserIdsSet = request.TargetUserIds.ToHashSet();
+
+                    // 1. Tìm các liên kết để XÓA
+                    // (Những user có trong DB nhưng KHÔNG có trong danh sách mới)
+                    var linksToRemove = currentLinks
+                        .Where(l => !targetUserIdsSet.Contains(l.UserId))
+                        .ToList();
+
+                    // 2. Tìm các UserId để THÊM MỚI
+                    // (Những user có trong danh sách mới nhưng KHÔNG có trong DB)
+                    var userIdsToAdd = targetUserIdsSet
+                        .Where(id => !existingUserIds.Contains(id))
+                        .ToList();
+
+                    // Thực hiện xóa
+                    if (linksToRemove.Any())
+                    {
+                        _context.UserNotifications.RemoveRange(linksToRemove);
+                    }
+
+                    // Thực hiện thêm mới
+                    if (userIdsToAdd.Any())
+                    {
+                        var linksToAdd = userIdsToAdd.Select(userId => new UserNotification
+                        {
+                            NotificationId = notificationId,
+                            UserId = userId,
+                            ReadAt = null // User mới luôn là 'chưa đọc'
+                        });
+                        _context.UserNotifications.AddRange(linksToAdd);
+                    }
                 }
+
+                // Lưu tất cả thay đổi (cả Notification và UserNotification)
                 await _context.SaveChangesAsync();
 
-                // 4. Lấy TẤT CẢ user liên quan
+                // 4. Lấy TẤT CẢ user liên quan (logic gửi thông báo giữ nguyên)
                 var allInvolvedUserIds = await _context.UserNotifications
                     .Where(un => un.NotificationId == notificationId)
                     .Select(un => un.UserId)
@@ -357,34 +405,6 @@ namespace DeTaiNhanSu.Services.Notification
             }
         }
 
-        // ==========================================================
-        // SỬA ĐỔI HÀM DELETE (Thêm Task<bool> và return)
-        // ==========================================================
-        public async Task<bool> DeleteUserNotificationAsync(Guid notificationId, Guid userId)
-        {
-            var userNotification = await _context.UserNotifications
-                .FirstOrDefaultAsync(un => un.NotificationId == notificationId && un.UserId == userId);
-
-            // ✅ THÊM DÒNG NÀY:
-            if (userNotification == null) return false; // Trả về false nếu không tìm thấy
-
-            // 1. Xóa khỏi Database
-            _context.UserNotifications.Remove(userNotification);
-            await _context.SaveChangesAsync();
-
-            // 2. Gửi SignalR (Logic này của bạn đã đúng)
-            string userIdString = userId.ToString();
-            var device = await _context.DeviceStatuses
-                .FirstOrDefaultAsync(d => d.DeviceId == userIdString && d.IsAppOpen);
-
-            if (device != null && !string.IsNullOrEmpty(device.ConnectionId))
-            {
-                await _hubContext.Clients.Client(device.ConnectionId)
-                    .SendAsync("ReceiveNotificationDelete", notificationId);
-            }
-
-            // ✅ THÊM DÒNG NÀY:
-            return true; // Trả về true khi thành công
-        }
+      
     }
 }
