@@ -28,7 +28,7 @@ namespace DeTaiNhanSu.Controllers
         // ========= GET: /api/workschedule?employeeId=&from=&to=&current=&pageSize=
         // ========= GET: /api/workschedule
         [HttpGet]
-        [Authorize(Roles = "HR, Admin, Manager")]
+        [Authorize(Roles = "HR, Admin, Manager, Employee")]
         public async Task<IActionResult> Search(
             [FromQuery] Guid? employeeId,
             [FromQuery] Guid? departmentId,
@@ -50,42 +50,35 @@ namespace DeTaiNhanSu.Controllers
                     .Include(x => x.ShiftTemplate) // [QUAN TRỌNG]: Include bảng mẫu ca
                     .AsQueryable();
 
-                // phân quyền dữ liệu cho manager
-                // lọc phòng ban
-                //if (!User.IsInRole("Manager"))
-                //{
-                //    var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier);
-                //    if (userIdClaim == null || !Guid.TryParse(userIdClaim.Value, out var currentUserId))
-                //    {
-                //        return Unauthorized();
-                //    }
-
-                //    var managerDepId = await _db.Users
-                //        .AsNoTracking()
-                //        .Where(u => u.Id == currentUserId)
-                //        .Select(u => u.Employee.DepartmentId)
-                //        .FirstOrDefaultAsync(ct);
-
-                //    if (managerDepId == null)
-                //    {
-                //        return this.OKSingle(new { meta = new { total = 0 }, result = new List<object>() }, "Tài khoản của bạn chưa được gán vào phòng ban nào.");
-                //    }
-
-                //    query = query.Where(x => x.Employee.DepartmentId == managerDepId);
-                //}
-                //else
-                //{
-                //    if (departmentId.HasValue)
-                //    {
-                //        query = query.Where(x => x.Employee.DepartmentId == departmentId);
-                //    }
-                //}
-
-
                 // bộ lọc chung chung cho role Manager
                 var filterDeptId = await _dataScope.GetAllowedDepartmentIdAsync(departmentId, ct);
 
+                if (!User.IsInRole("Admin") && !User.IsInRole("HR") && !User.IsInRole("Manager"))
+                {
+                    var userIdStr = User.FindFirstValue(ClaimTypes.NameIdentifier);
+                    if (Guid.TryParse(userIdStr, out var uid))
+                    {
+                        // Lấy EmployeeId của user đang đăng nhập
+                        var myInfo = await _db.Users.AsNoTracking()
+                            .Where(u => u.Id == uid)
+                            .Select(u => new { u.EmployeeId })
+                            .FirstOrDefaultAsync(ct);
 
+                        if (myInfo != null && myInfo.EmployeeId != Guid.Empty)
+                        {
+                            // BẮT BUỘC lọc theo EmployeeId của chính họ
+                            query = query.Where(x => x.EmployeeId == myInfo.EmployeeId);
+
+                            // (Tùy chọn) Ghi đè tham số employeeId để logic bên dưới không bị conflict (dù query đã filter rồi)
+                            employeeId = myInfo.EmployeeId;
+                        }
+                        else
+                        {
+                            // Trường hợp User đăng nhập nhưng chưa liên kết với Employee -> Trả về rỗng
+                            return this.OKSingle(new { meta = new { total = 0 }, result = new List<object>() }, "Tài khoản chưa liên kết hồ sơ nhân viên.");
+                        }
+                    }
+                }
 
                 // --- Filtering ---
                 if (employeeId is not null)
@@ -97,6 +90,7 @@ namespace DeTaiNhanSu.Controllers
                 {
                     query = query.Where(x => x.Employee.DepartmentId == filterDeptId.Value);
                 }
+
 
                 // 3. Lọc theo Ca làm việc
                 if (shiftTemplateId.HasValue)

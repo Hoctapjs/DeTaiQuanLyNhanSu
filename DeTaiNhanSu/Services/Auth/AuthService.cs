@@ -587,7 +587,7 @@ namespace DeTaiNhanSu.Services.Auth
             string helpEmail = "support@huynhthanhson.io.vn";
             string companyName = "Công Ty TNHH NPS";
             string companyAddress = "140 Lê Trọng Tấn, Tây Thạnh, Tân Phú";
-            string loginUrl = "https://hrm.frontend.ifanit.io.vn"; // Link đăng nhập của bạn
+            string loginUrl = "https://hrm.frontend.ifanit.io.vn"; // Link đăng nhập của bạn    
 
             // Helper encode
             string Enc(string? s) => System.Net.WebUtility.HtmlEncode(s ?? "");
