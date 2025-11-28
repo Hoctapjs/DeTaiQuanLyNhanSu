@@ -24,6 +24,7 @@ using DeTaiNhanSu.Hubs;
 using AuditActionFilter = DeTaiNhanSu.Services.Log.AuditActionFilter;
 using Microsoft.Extensions.Options;
 using QuestPDF.Infrastructure;
+using DeTaiNhanSu.Services.Scope;
 
 QuestPDF.Settings.License = LicenseType.Community;
 
@@ -37,6 +38,7 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddScoped<IAuditScope, AuditScope>();
 builder.Services.AddScoped<AuditSaveChangesInterceptor>();
 builder.Services.AddScoped<AuditActionFilter>(); // để MVC có thể resolve filter từ DI
+builder.Services.AddScoped<IDataScopeService, DataScopeService>();
 
 // ==== Controllers + Global Filters (chỉ ĐÚNG 1 lần) ====
 builder.Services.AddControllers(o =>

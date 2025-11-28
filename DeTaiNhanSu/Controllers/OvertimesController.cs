@@ -3,6 +3,7 @@ using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos.OvertimeDtoFol;
 using DeTaiNhanSu.Models;
 using DeTaiNhanSu.Services.Auth;
+using DeTaiNhanSu.Services.Scope;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -15,7 +16,13 @@ namespace DeTaiNhanSu.Controllers
     public sealed class OvertimesController : ControllerBase
     {
         private readonly AppDbContext _db;
-        public OvertimesController(AppDbContext db) => _db = db;
+        private readonly IDataScopeService _dataScope;
+
+        public OvertimesController(AppDbContext db, IDataScopeService dataScope)
+        {
+            _db = db;
+            _dataScope = dataScope;
+        }
 
         // ========= GET: /api/overtimes?employeeId=&from=&to=&minHours=&maxHours=&current=&pageSize=&sort=
         [HttpGet]
@@ -36,13 +43,22 @@ namespace DeTaiNhanSu.Controllers
                 if (current < 1) current = 1;
                 if (pageSize is < 1 or > 200) pageSize = 20;
 
-                var query = _db.Overtimes.AsNoTracking().AsQueryable();
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var query = _db.Overtimes
+                    .AsNoTracking()
+                    .AsQueryable();
 
                 if (employeeId is not null) query = query.Where(x => x.EmployeeId == employeeId);
                 if (from is not null) query = query.Where(x => x.Date >= from);
                 if (to is not null) query = query.Where(x => x.Date <= to);
                 if (minHours is not null) query = query.Where(x => x.Hours >= minHours);
                 if (maxHours is not null) query = query.Where(x => x.Hours <= maxHours);
+
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
 
                 query = sort?.Trim() switch
                 {
@@ -135,13 +151,22 @@ namespace DeTaiNhanSu.Controllers
         {
             try
             {
-                var query = _db.Overtimes.AsNoTracking().AsQueryable();
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var query = _db.Overtimes
+                    .AsNoTracking()
+                    .AsQueryable();
 
                 if (employeeId is not null) query = query.Where(x => x.EmployeeId == employeeId);
                 if (from is not null) query = query.Where(x => x.Date >= from);
                 if (to is not null) query = query.Where(x => x.Date <= to);
                 if (minHours is not null) query = query.Where(x => x.Hours >= minHours);
                 if (maxHours is not null) query = query.Where(x => x.Hours <= maxHours);
+
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
 
                 query = sort?.Trim() switch
                 {
@@ -209,8 +234,17 @@ namespace DeTaiNhanSu.Controllers
         {
             try
             {
-                var x = await _db.Overtimes.AsNoTracking()
-                    .FirstOrDefaultAsync(o => o.Id == id, ct);
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var query = _db.Overtimes
+                    .AsNoTracking();
+
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
+
+                var x = await query.FirstOrDefaultAsync(o => o.Id == id, ct);
 
                 if (x is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy bản ghi tăng ca.");
@@ -269,9 +303,26 @@ namespace DeTaiNhanSu.Controllers
                 if (req is null)
                     return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
 
-                // Validate FK
-                var empExists = await _db.Employees.AnyAsync(e => e.Id == req.EmployeeId, ct);
-                if (!empExists) return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại.");
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var empQuery = _db.Employees.AsNoTracking().AsQueryable();
+
+                // Nếu có giới hạn phòng ban -> Thêm điều kiện lọc
+                if (allowedDeptId.HasValue)
+                {
+                    empQuery = empQuery.Where(e => e.DepartmentId == allowedDeptId.Value);
+                }
+
+                // Kiểm tra xem nhân viên có tồn tại trong phạm vi cho phép không
+                var empExists = await empQuery.AnyAsync(e => e.Id == req.EmployeeId, ct);
+
+                if (!empExists)
+                {
+                    // Nếu không tìm thấy, có thể do ID sai HOẶC do Manager đang cố tạo cho nhân viên phòng khác.
+                    // Trả về 404 để bảo mật (không tiết lộ nhân viên phòng khác có tồn tại hay không).
+                    return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại (hoặc không thuộc quyền quản lý).");
+                }
+
 
                 // Validate fields
                 if (req.Date is null)

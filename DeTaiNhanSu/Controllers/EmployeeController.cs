@@ -1098,6 +1098,8 @@ using DeTaiNhanSu.Common;
 using System.Text.Json;
 using Microsoft.AspNetCore.SignalR;
 using DeTaiNhanSu.Hubs;
+using DeTaiNhanSu.Services.Scope;
+//using DocumentFormat.OpenXml.Bibliography;
 
 namespace DeTaiNhanSu.Controllers
 {
@@ -1109,13 +1111,16 @@ namespace DeTaiNhanSu.Controllers
         private readonly IEmailSender _emailSender;
         private readonly IPasswordHasher<User> _hasher;
         private readonly IHubContext<NotificationNewHub> _hubContext;
+        private readonly IDataScopeService _dataScope;
 
-        public EmployeeController(AppDbContext db, IEmailSender emailSender, IPasswordHasher<User> hasher, IHubContext<NotificationNewHub> hubContext)
+
+        public EmployeeController(AppDbContext db, IEmailSender emailSender, IPasswordHasher<User> hasher, IHubContext<NotificationNewHub> hubContext, IDataScopeService dataScope)
         {
             _db = db;
             _emailSender = emailSender;
             _hasher = hasher;
             _hubContext = hubContext;
+            _dataScope = dataScope;
         }
 
         //[HttpGet]
@@ -1236,7 +1241,18 @@ namespace DeTaiNhanSu.Controllers
                 }
 
                 if (status is not null) query = query.Where(x => x.Status == status);
-                if (departmentId is not null) query = query.Where(x => x.DepartmentId == departmentId);
+                //if (departmentId is not null) query = query.Where(x => x.DepartmentId == departmentId);
+
+                // bộ lọc chung chung cho role Manager
+                var filterDeptId = await _dataScope.GetAllowedDepartmentIdAsync(departmentId, ct);
+                
+                // bộ lọc chung chung cho role Manager kiểm tra
+                if (filterDeptId.HasValue)
+                {
+                    query = query.Where(x => x.DepartmentId == filterDeptId.Value);
+                }
+
+
                 if (positionId is not null) query = query.Where(x => x.PositionId == positionId);
 
                 query = sort?.Trim() switch
@@ -1323,7 +1339,17 @@ namespace DeTaiNhanSu.Controllers
                 }
 
                 if (status is not null) query = query.Where(x => x.Status == status);
-                if (departmentId is not null) query = query.Where(x => x.DepartmentId == departmentId);
+                //if (departmentId is not null) query = query.Where(x => x.DepartmentId == departmentId);
+
+                // bộ lọc chung chung cho role Manager
+                var filterDeptId = await _dataScope.GetAllowedDepartmentIdAsync(departmentId, ct);
+
+                // bộ lọc chung chung cho role Manager kiểm tra
+                if (filterDeptId.HasValue)
+                {
+                    query = query.Where(x => x.DepartmentId == filterDeptId.Value);
+                }
+
                 if (positionId is not null) query = query.Where(x => x.PositionId == positionId);
 
                 query = sort?.Trim() switch
@@ -2046,11 +2072,20 @@ namespace DeTaiNhanSu.Controllers
         {
             try
             {
-                var e = await _db.Employees
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var query = _db.Employees
                     .AsNoTracking()
                     .Include(x => x.Department)
                     .Include(x => x.Position)
-                    .FirstOrDefaultAsync(x => x.Id == id, ct);
+                    .AsQueryable();
+
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.DepartmentId == allowedDeptId.Value);
+                }
+
+                var e = await query.FirstOrDefaultAsync(x => x.Id == id, ct);
 
                 if (e is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy nhân viên.");
@@ -2082,6 +2117,16 @@ namespace DeTaiNhanSu.Controllers
                 return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi khi lấy thông tin nhân viên.");
             }
         }
+
+
+        // bộ lọc chung chung cho role Manager
+        //var filterDeptId = await _dataScope.GetAllowedDepartmentIdAsync(departmentId, ct);
+                
+        //        // bộ lọc chung chung cho role Manager kiểm tra
+        //        if (filterDeptId.HasValue)
+        //        {
+        //            query = query.Where(x => x.DepartmentId == filterDeptId.Value);
+        //        }
 
         //[HttpPost]
         //[HasPermission("Employees.Manage")]

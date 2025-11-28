@@ -4,6 +4,7 @@ using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos;
 using DeTaiNhanSu.Hubs;
 using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services.Scope;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.SignalR;
@@ -179,10 +180,14 @@ namespace DeTaiNhanSu.Controllers
 
         private readonly IHubContext<NotificationNewHub> _hubContext;
 
-        public DepartmentController(AppDbContext db, IHubContext<NotificationNewHub> hubContext)
+        private readonly IDataScopeService _dataScope;
+
+
+        public DepartmentController(AppDbContext db, IHubContext<NotificationNewHub> hubContext, IDataScopeService dataScope)
         {
             _db = db;
             _hubContext = hubContext;
+            _dataScope = dataScope;
         }
 
         // GET /api/department?...
@@ -259,7 +264,8 @@ namespace DeTaiNhanSu.Controllers
                 if (current < 1) current = 1;
                 if (pageSize is < 1 or > 200) pageSize = 20;
 
-                var query = _db.Departments.AsNoTracking()
+                var query = _db.Departments
+                    .AsNoTracking()
                     .Include(d => d.Manager)
                     .Include(d => d.Employees)
                     .AsQueryable();

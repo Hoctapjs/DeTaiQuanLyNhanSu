@@ -10,7 +10,7 @@ namespace DeTaiNhanSu.Services.Auth
         Task<TokenResponse> RefreshAsync(string refreshToken, CancellationToken ct);
         Task<MeResponse> MeAsync(Guid userId, CancellationToken ct);
         Task ResetPasswordByHRAsync(Guid id, CancellationToken ct);
-
         Task ChangePasswordAsync(Guid userId, string currentPassword, string newPassword, CancellationToken ct);
+        Task ForgotPasswordAsync(string email, CancellationToken ct);
     }
 }

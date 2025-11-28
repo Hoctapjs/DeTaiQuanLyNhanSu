@@ -12,6 +12,7 @@ namespace DeTaiNhanSu.DbContextProject
         {
         }
 
+        public DbSet<ShiftTemplate> ShiftTemplates => Set<ShiftTemplate>();
         public DbSet<Employee> Employees => Set<Employee>();
         public DbSet<Department> Departments => Set<Department>();
         public DbSet<Position> Positions => Set<Position>();

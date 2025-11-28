@@ -297,6 +297,7 @@ using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos.TrainingRecordDtoFol;
 using DeTaiNhanSu.Enums;
 using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services.Scope;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -308,7 +309,13 @@ namespace DeTaiNhanSu.Controllers
     public class TrainingRecordController : ControllerBase
     {
         private readonly AppDbContext _db;
-        public TrainingRecordController(AppDbContext db) => _db = db;
+        private readonly IDataScopeService _dataScope;
+
+        public TrainingRecordController(AppDbContext db, IDataScopeService dataScope)
+        {
+            _db = db;
+            _dataScope = dataScope;
+        }
 
         [HttpGet]
         [Authorize(Roles = "HR, Manager")]
@@ -327,6 +334,8 @@ namespace DeTaiNhanSu.Controllers
             {
                 if (current < 1) current = 1;
                 if (pageSize is < 1 or > 200) pageSize = 20;
+
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
 
                 var q = _db.TrainingRecords
                     .AsNoTracking()
@@ -349,6 +358,11 @@ namespace DeTaiNhanSu.Controllers
 
                 if (maxScore.HasValue)
                     q = q.Where(x => x.Score <= maxScore.Value);
+
+                if (allowedDeptId.HasValue)
+                {
+                    q = q.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
 
                 q = sort?.Trim() switch
                 {
@@ -406,12 +420,21 @@ namespace DeTaiNhanSu.Controllers
         {
             try
             {
-                var x = await _db.TrainingRecords
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var query = _db.TrainingRecords
                     .AsNoTracking()
                     .Include(r => r.Employee)
                     .Include(r => r.Course)
                     .Include(r => r.EvaluatedByUser)
-                    .FirstOrDefaultAsync(r => r.Id == id, ct);
+                    .AsQueryable();
+
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
+
+                var x = await query.FirstOrDefaultAsync(r => r.Id == id, ct);
 
                 if (x is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy hồ sơ đào tạo.");
@@ -448,8 +471,20 @@ namespace DeTaiNhanSu.Controllers
                 if (!ModelState.IsValid)
                     return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
 
-                var employeeExists = await _db.Employees.AnyAsync(e => e.Id == req.EmployeeId, ct);
-                if (!employeeExists) return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại.");
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var empQuery = _db.Employees.AsNoTracking().AsQueryable();
+
+                // Nếu là Manager -> Chỉ tìm trong phòng ban được phép
+                if (allowedDeptId.HasValue)
+                {
+                    empQuery = empQuery.Where(e => e.DepartmentId == allowedDeptId.Value);
+                }
+
+                // Kiểm tra tồn tại (trong phạm vi cho phép)
+                var employeeExists = await empQuery.AnyAsync(e => e.Id == req.EmployeeId, ct);
+                if (!employeeExists)
+                    return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại (hoặc không thuộc quyền quản lý).");
 
                 var course = await _db.Courses.AsNoTracking().FirstOrDefaultAsync(c => c.Id == req.CourseId, ct);
                 if (course is null) return this.FAIL(StatusCodes.Status404NotFound, "Khóa học không tồn tại.");
@@ -507,25 +542,35 @@ namespace DeTaiNhanSu.Controllers
                 _db.TrainingRecords.Add(tr);
                 await _db.SaveChangesAsync(ct);
 
+                var fullRecord = await _db.TrainingRecords
+                    .AsNoTracking()
+                    .Include(x => x.Employee)
+                    .Include(x => x.Course)
+                    .Include(x => x.EvaluatedByUser)
+                    .FirstAsync(x => x.Id == tr.Id, ct);
+
+                var dto = new TrainingRecordDto
+                {
+                    Id = fullRecord.Id,
+                    EmployeeId = fullRecord.EmployeeId,
+                    EmployeeCode = fullRecord.Employee.Code,
+                    EmployeeName = fullRecord.Employee.FullName,
+                    CourseId = fullRecord.CourseId,
+                    CourseName = fullRecord.Course.Name,
+                    Score = fullRecord.Score,
+                    Status = fullRecord.Status,
+                    EvaluatedBy = fullRecord.EvaluatedBy,
+                    EvaluatedByUserName = fullRecord.EvaluatedByUser?.UserName,
+                    EvaluationNote = fullRecord.EvaluationNote
+                };
+
                 return StatusCode(StatusCodes.Status201Created, new
                 {
                     statusCode = StatusCodes.Status201Created,
                     message = "Tạo hồ sơ đào tạo thành công (điểm tính tự động).",
                     data = new
                     {
-                        result = new
-                        {
-                            tr.Id,
-                            tr.EmployeeId,
-                            tr.CourseId,
-                            score = tr.Score,
-                            status = tr.Status.ToString(),
-                            totalQuestions,
-                            answered,
-                            correct,
-                            passThreshold = course.PassThreshold,
-                            passed = (status == TrainingStatus.completed)
-                        }
+                        result = dto
                     },
                     success = true
                 });
@@ -544,7 +589,20 @@ namespace DeTaiNhanSu.Controllers
         {
             try
             {
-                var tr = await _db.TrainingRecords.FirstOrDefaultAsync(x => x.Id == id, ct);
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                // Tạo query cơ bản
+                var query = _db.TrainingRecords
+                    .Include(x => x.Employee) // Cần include Employee để check phòng ban
+                    .AsQueryable();
+
+                // Nếu là Manager (có allowedDeptId) -> Chỉ tìm bản ghi thuộc phòng ban đó
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
+
+                var tr = await query.FirstOrDefaultAsync(x => x.Id == id, ct);
                 if (tr is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy hồ sơ đào tạo.");
 
@@ -573,7 +631,36 @@ namespace DeTaiNhanSu.Controllers
                     tr.EvaluationNote = string.IsNullOrWhiteSpace(req.EvaluationNote) ? null : req.EvaluationNote.Trim();
 
                 await _db.SaveChangesAsync(ct);
-                return this.OK(message: "Cập nhật hồ sơ đào tạo thành công.");
+
+                var fullRecord = await _db.TrainingRecords
+                   .AsNoTracking()
+                   .Include(x => x.Employee)
+                   .Include(x => x.Course)
+                   .Include(x => x.EvaluatedByUser)
+                   .FirstAsync(x => x.Id == id, ct);
+
+                var dto = new TrainingRecordDto
+                {
+                    Id = fullRecord.Id,
+                    EmployeeId = fullRecord.EmployeeId,
+                    EmployeeCode = fullRecord.Employee.Code,
+                    EmployeeName = fullRecord.Employee.FullName,
+                    CourseId = fullRecord.CourseId,
+                    CourseName = fullRecord.Course.Name,
+                    Score = fullRecord.Score,
+                    Status = fullRecord.Status,
+                    EvaluatedBy = fullRecord.EvaluatedBy,
+                    EvaluatedByUserName = fullRecord.EvaluatedByUser?.UserName,
+                    EvaluationNote = fullRecord.EvaluationNote
+                };
+
+                return StatusCode(StatusCodes.Status200OK, new
+                {
+                    statusCode = StatusCodes.Status200OK,
+                    message = "Cập nhật hồ sơ đào tạo thành công.",
+                    data = new { result = dto },
+                    success = true
+                });
             }
             catch
             {
@@ -587,7 +674,18 @@ namespace DeTaiNhanSu.Controllers
         {
             try
             {
-                var tr = await _db.TrainingRecords.FirstOrDefaultAsync(x => x.Id == id, ct);
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var query = _db.TrainingRecords
+                    .Include(x => x.Employee)
+                    .AsQueryable();
+
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(r => r.Employee.DepartmentId == allowedDeptId.Value);
+                }
+
+                var tr = await query.FirstOrDefaultAsync(x => x.Id == id, ct);
                 if (tr is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy hồ sơ đào tạo.");
 

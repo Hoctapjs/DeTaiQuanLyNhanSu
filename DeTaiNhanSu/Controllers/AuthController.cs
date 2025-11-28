@@ -282,7 +282,7 @@ namespace DeTaiNhanSu.Controllers
         // HR reset mật khẩu cho nhân viên (cần quyền)
         [HttpPost("hr/reset-password/{id:guid}")]
         [Authorize(Roles = "HR, Admin")]
-        [HasPermission("Users.Manage")]
+        //[HasPermission("Users.Manage")]
         public async Task<IActionResult> ResetPasswordByHRAsync([FromRoute] Guid id, CancellationToken ct)
         {
             try
@@ -297,6 +297,26 @@ namespace DeTaiNhanSu.Controllers
             catch (Exception)
             {
                 return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi khi đặt lại mật khẩu.");
+            }
+        }
+
+        [HttpPost("forgot-password")]
+        [AllowAnonymous] 
+        public async Task<IActionResult> ForgotPassword([FromBody] Dtos.ForgotPasswordRequest req, CancellationToken ct)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(req.Email))
+                    return this.FAIL(StatusCodes.Status400BadRequest, "Vui lòng nhập email.");
+
+                await _authService.ForgotPasswordAsync(req.Email, ct);
+
+                // Luôn trả về OK dù email có tồn tại hay không để tránh dò user (Security best practice)
+                return this.OK(message: "Nếu email tồn tại trong hệ thống, mật khẩu mới sẽ được gửi tới hộp thư của bạn.");
+            }
+            catch (Exception)
+            {
+                return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi khi xử lý yêu cầu.");
             }
         }
     }

@@ -4,6 +4,7 @@ using DeTaiNhanSu.Dtos.RewardPenaltyDtoFol;
 using DeTaiNhanSu.Enums;
 using DeTaiNhanSu.Models;
 using DeTaiNhanSu.Services.Auth;
+using DeTaiNhanSu.Services.Scope;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,14 @@ namespace DeTaiNhanSu.Controllers
     public sealed class RewardPenaltiesController : ControllerBase
     {
         private readonly AppDbContext _db;
-        public RewardPenaltiesController(AppDbContext db) => _db = db;
+        private readonly IDataScopeService _dataScope;
+
+
+        public RewardPenaltiesController(AppDbContext db, IDataScopeService dataScope)
+        {
+            _db = db;
+            _dataScope = dataScope;
+        }
 
         // ========= GET: /api/rewardpenalties?employeeId=&typeId=&kind=&from=&to=&decidedBy=&current=&pageSize=&sort=
         [HttpGet]
@@ -38,6 +46,9 @@ namespace DeTaiNhanSu.Controllers
                 if (current < 1) current = 1;
                 if (pageSize is < 1 or > 200) pageSize = 20;
 
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+
                 var query = _db.RewardPenalties
                     .AsNoTracking()
                     .Include(x => x.Type) // để lọc kind + lấy DefaultAmount/Name
@@ -50,6 +61,12 @@ namespace DeTaiNhanSu.Controllers
                 if (from is not null) query = query.Where(x => x.DecidedAt >= from);
                 if (to is not null) query = query.Where(x => x.DecidedAt <= to);
                 if (decidedBy is not null) query = query.Where(x => x.DecidedBy == decidedBy);
+
+                // filter manager
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
 
                 query = sort?.Trim() switch
                 {
@@ -115,6 +132,8 @@ namespace DeTaiNhanSu.Controllers
         {
             try
             {
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
                 var query = _db.RewardPenalties
                     .AsNoTracking()
                     .Include(x => x.Type)
@@ -126,6 +145,13 @@ namespace DeTaiNhanSu.Controllers
                 if (from is not null) query = query.Where(x => x.DecidedAt >= from);
                 if (to is not null) query = query.Where(x => x.DecidedAt <= to);
                 if (decidedBy is not null) query = query.Where(x => x.DecidedBy == decidedBy);
+
+                // filter manager
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
+
 
                 query = sort?.Trim() switch
                 {

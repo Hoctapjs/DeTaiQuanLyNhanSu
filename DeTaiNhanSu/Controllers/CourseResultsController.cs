@@ -4,6 +4,7 @@ using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos.CourseResultDtoFol;
 using DeTaiNhanSu.Enums;
 using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services.Scope;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -16,7 +17,13 @@ namespace DeTaiNhanSu.Controllers;
 public class CourseResultsController : ControllerBase
 {
     private readonly AppDbContext _db;
-    public CourseResultsController(AppDbContext db) => _db = db;
+    private readonly IDataScopeService _dataScope;
+
+    public CourseResultsController(AppDbContext db, IDataScopeService dataScope)
+    {
+        _db = db;
+        _dataScope = dataScope;
+    }
 
     // GET /api/courseresults?employeeId=&courseId=&isCorrect=&from=&to=&current=&pageSize=&sort=AnsweredAt|-AnsweredAt
     [HttpGet]
@@ -610,7 +617,18 @@ public class CourseResultsController : ControllerBase
     {
         try
         {
-            var e = await _db.CourseResults.FirstOrDefaultAsync(x =>
+            var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+            var query = _db.CourseResults.AsQueryable();
+
+            if (allowedDeptId.HasValue)
+            {
+                query = query.Where(cr => _db.Employees.Any(e =>
+                    e.Id == cr.EmployeeId &&
+                    e.DepartmentId == allowedDeptId.Value));
+            }
+
+            var e = await query.FirstOrDefaultAsync(x =>
                 x.EmployeeId == employeeId &&
                 x.CourseId == courseId &&
                 x.QuestionId == questionId, ct);

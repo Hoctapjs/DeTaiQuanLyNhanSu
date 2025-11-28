@@ -38,7 +38,9 @@ namespace DeTaiNhanSu.Controllers
                 if (current < 1) current = 1;
                 if (pageSize is < 1 or > 200) pageSize = 20;
 
-                var query = _db.RewardPenaltyTypes.AsNoTracking().AsQueryable();
+                var query = _db.RewardPenaltyTypes
+                    .AsNoTracking()
+                    .AsQueryable();
 
                 if (!string.IsNullOrWhiteSpace(q))
                 {

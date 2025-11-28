@@ -443,7 +443,7 @@ namespace DeTaiNhanSu.Controllers
         }
 
         [HttpPost]
-       [Authorize(Roles = "HR, Manager")]
+        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Create([FromBody] CreateCourseRequest req, CancellationToken ct)
         {
             try

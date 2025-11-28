@@ -6,6 +6,7 @@ using DeTaiNhanSu.Dtos;
 using DeTaiNhanSu.Enums;
 using DeTaiNhanSu.Models;
 using DeTaiNhanSu.Services.Email;
+using DeTaiNhanSu.Services.Scope;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
@@ -18,10 +19,13 @@ namespace DeTaiNhanSu.Controllers
     {
         private readonly AppDbContext _db;
         private readonly IEmailSender _emailSender;
-        public ContractController(AppDbContext db, IEmailSender emailSender)
+        private readonly IDataScopeService _dataScope;
+
+        public ContractController(AppDbContext db, IEmailSender emailSender, IDataScopeService dataScope)
         {
             _db = db;
             _emailSender = emailSender;
+            _dataScope = dataScope;
         }
 
         [HttpGet]
@@ -51,7 +55,18 @@ namespace DeTaiNhanSu.Controllers
                     pageSize = 20;
                 }
 
-                var query = _db.Contracts.AsNoTracking().Include(c => c.Employee).Include(c => c.Representative).AsQueryable();
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var query = _db.Contracts
+                    .AsNoTracking()
+                    .Include(c => c.Employee)
+                    .Include(c => c.Representative)
+                    .AsQueryable();
+
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
 
                 if (!string.IsNullOrWhiteSpace(q))
                 {
@@ -150,10 +165,20 @@ namespace DeTaiNhanSu.Controllers
         {
             try
             {
-                var c = await _db.Contracts.AsNoTracking()
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+                var query = _db.Contracts
+                    .AsNoTracking()
                     .Include(x => x.Employee)
                     .Include(x => x.Representative)
-                    .FirstOrDefaultAsync(x => x.Id == id, ct);
+                    .AsQueryable();
+
+                if (allowedDeptId.HasValue)
+                {
+                    query = query.Where(x => x.Employee.DepartmentId == allowedDeptId.Value);
+                }
+
+                var c = await query.FirstOrDefaultAsync(x => x.Id == id, ct);
 
                 if (c is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy hợp đồng.");
@@ -984,15 +1009,27 @@ namespace DeTaiNhanSu.Controllers
                 if (page < 1) page = 1;
                 if (pageSize is < 1 or > 200) pageSize = 20;
 
+                // filter manager
+                var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
+
+
                 var today = DateOnly.FromDateTime(DateTime.UtcNow.Date);
                 var until = today.AddDays(withinDays);
 
-                var q = _db.Contracts.AsNoTracking()
+                var q = _db.Contracts
+                    .AsNoTracking()
                     .Include(c => c.Employee)
-                    .Where(c => c.Status != ContractStatus.terminated &&
-                                c.EndDate != null &&
-                                c.EndDate >= today &&
-                                c.EndDate <= until);
+                    .AsQueryable();
+
+                if (allowedDeptId.HasValue)
+                {
+                    q = q.Where(c => c.Employee.DepartmentId == allowedDeptId.Value);
+                }
+
+                q = q.Where(c => c.Status != ContractStatus.terminated &&
+                                 c.EndDate != null &&
+                                 c.EndDate >= today &&
+                                 c.EndDate <= until);
 
                 var total = await q.CountAsync(ct);
                 var result = await q.OrderBy(c => c.EndDate)
