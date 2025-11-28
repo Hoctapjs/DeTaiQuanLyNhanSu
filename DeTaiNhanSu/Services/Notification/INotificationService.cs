@@ -11,6 +11,7 @@ namespace DeTaiNhanSu.Services.Notification
         Task SendPayrollNotificationAsync(string title, string content, List<Guid>? targetUserIds = null);
         Task SendAttendanceNotificationAsync(string title, string content, List<Guid>? targetUserIds = null);
         Task SendLeaveRequestNotificationAsync(string title, string content, List<Guid>? targetUserIds = null);
+        Task SendLeaveRequestNotificationAsync(string title, string content, Guid targetUserId);
         /// <summary>
         /// Cập nhật thông báo và trả về true nếu thành công, false nếu không tìm thấy
         /// </summary>

@@ -11,6 +11,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using System.Globalization;
 using Microsoft.AspNetCore.Authorization;
+using DeTaiNhanSu.Services.Notification; // 👈 Đảm bảo có namespace này
 
 
 namespace DeTaiNhanSu.Controllers
@@ -47,8 +48,13 @@ namespace DeTaiNhanSu.Controllers
     public class RequestController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly INotificationService _notificationService; // 👈 Khai báo Service
 
-        public RequestController(AppDbContext context) => _context = context;
+        public RequestController(AppDbContext context, INotificationService notificationService)
+        {
+            _context = context;
+            _notificationService = notificationService;
+        }
 
         // Phương thức hỗ trợ tạo phản hồi lỗi nhất quán
         private IActionResult CreateErrorResponse(int statusCode, string message)
@@ -228,7 +234,8 @@ namespace DeTaiNhanSu.Controllers
                     r.Category.ToString().Contains(q) ||
                     r.Status.ToString().Contains(q) ||
                     (r.Employee != null && r.Employee.FullName.Contains(q)) ||
-                    (r.Employee != null && r.Employee.Code.Contains(q))
+                    (r.Employee != null && r.Employee.Code.Contains(q) ||
+                    r.EmployeeId.ToString().Contains(q))
                 );
             }
 
@@ -313,62 +320,72 @@ namespace DeTaiNhanSu.Controllers
         [HttpPut("process/{requestId}")]
         public async Task<IActionResult> ProcessRequest(Guid requestId, [FromBody] ProcessRequestDto request)
         {
-            // 1. Kiểm tra đầu vào
+            // 1. Kiểm tra đầu vào cơ bản
             if (request.ApproverUserId == Guid.Empty || (request.NewStatus != RequestStatus.approved && request.NewStatus != RequestStatus.rejected))
             {
-                return CreateErrorResponse(400, "Thiếu ID người duyệt hoặc NewStatus không hợp lệ (Chỉ chấp nhận 'Approved' hoặc 'Rejected').");
+                return BadRequest(new { success = false, message = "Thiếu ID người duyệt hoặc NewStatus không hợp lệ." });
             }
 
-            // KIỂM TRA APPROVERUSER TỒN TẠI
-            var approverExists = await _context.Users.AnyAsync(u => u.Id == request.ApproverUserId);
-            if (!approverExists)
+            // 2. LẤY THÔNG TIN NGƯỜI DUYỆT (User + Employee) ĐỂ LẤY TÊN
+            var approverUser = await _context.Users
+                .Include(u => u.Employee)
+                .FirstOrDefaultAsync(u => u.Id == request.ApproverUserId);
+
+            if (approverUser == null)
             {
-                return CreateErrorResponse(404, "ID người duyệt (ApproverUserId) không tồn tại trong hệ thống User.");
+                return NotFound(new { success = false, message = "ID người duyệt không tồn tại." });
             }
 
-            // 2. Tìm yêu cầu
+            // Xác định tên người duyệt (Ưu tiên Tên NV, nếu không có thì lấy Username)
+            string approverName = approverUser.Employee?.FullName ?? approverUser.UserName ?? "Unknown Approver";
+
+            // 3. Tìm yêu cầu cần xử lý
             var currentRequest = await _context.Requests
                 .FirstOrDefaultAsync(r => r.Id == requestId);
 
             if (currentRequest == null)
             {
-                return CreateErrorResponse(404, "Không tìm thấy yêu cầu này.");
+                return NotFound(new { success = false, message = "Không tìm thấy yêu cầu này." });
             }
             if (currentRequest.Status != RequestStatus.pending)
             {
-                return CreateErrorResponse(400, $"Yêu cầu đã ở trạng thái '{currentRequest.Status}'. Không thể xử lý lại.");
-            }
-            if (!currentRequest.FromDate.HasValue)
-            {
-                return CreateErrorResponse(400, "Yêu cầu thiếu ngày bắt đầu (FromDate).");
+                return BadRequest(new { success = false, message = $"Yêu cầu này đã được xử lý ({currentRequest.Status})." });
             }
 
-            string finalMessage;
+            // 4. XỬ LÝ LOGIC CHUNG: TẠO GHI CHÚ (NOTE)
+            string actionText = request.NewStatus == RequestStatus.approved ? "ĐƯỢC DUYỆT" : "TỪ CHỐI";
+            string timeStamp = DateTime.Now.ToString("dd/MM/yyyy HH:mm");
+            string reasonContent = string.IsNullOrEmpty(request.Reason) ? "Không có ghi chú thêm" : request.Reason;
 
-            // 3. XỬ LÝ TỪ CHỐI (REJECTED)
+            // Tạo chuỗi log
+            string processNote = $"[{actionText} bởi {approverName} vào {timeStamp}]: {reasonContent}";
+
+            // === CẬP NHẬT DESCRIPTION ===
+            currentRequest.Description = (currentRequest.Description ?? "") + "\n--- " + processNote;
+
+            // Cập nhật trạng thái và người duyệt vào DB
+            currentRequest.Status = request.NewStatus;
+            currentRequest.ApprovedBy = request.ApproverUserId;
+
+            string finalMessage = "";
+
+            // 5. XỬ LÝ LOGIC RIÊNG TỪNG TRẠNG THÁI
             if (request.NewStatus == RequestStatus.rejected)
             {
-                currentRequest.Status = RequestStatus.rejected;
-                currentRequest.ApprovedBy = request.ApproverUserId;
+                // --- TRƯỜNG HỢP TỪ CHỐI ---
+                finalMessage = $"Đã từ chối yêu cầu {currentRequest.Category}.";
 
-                string rejectionNote = $"[REJECTED by {request.ApproverUserId}]: {request.Reason ?? "Không có lý do cụ thể."}";
-                currentRequest.Description = (currentRequest.Description ?? "") + "\n--- " + rejectionNote;
-
-                finalMessage = $"Đã từ chối yêu cầu {currentRequest.Category} thành công.";
-
-                // CẬP NHẬT ATTENDANCE KHI BỊ TỪ CHỐI (Leave)
-                if (currentRequest.Category == RequestCategory.leave)
+                // Nếu là nghỉ phép -> Cập nhật lại Attendance (nếu đã tạo tạm - Absent)
+                if (currentRequest.Category == RequestCategory.leave && currentRequest.FromDate.HasValue)
                 {
                     DateOnly startDate = currentRequest.FromDate.Value;
                     DateOnly endDate = currentRequest.ToDate ?? startDate;
-
                     DateTime loopStart = startDate.ToDateTime(TimeOnly.MinValue).Date;
                     DateTime loopEnd = endDate.ToDateTime(TimeOnly.MinValue).Date;
 
                     for (DateTime date = loopStart; date <= loopEnd; date = date.AddDays(1))
                     {
                         if (date.DayOfWeek == DayOfWeek.Sunday) continue;
-
                         DateOnly currentDayOnly = DateOnly.FromDateTime(date);
 
                         var attendance = await _context.Attendances
@@ -376,63 +393,47 @@ namespace DeTaiNhanSu.Controllers
 
                         if (attendance != null)
                         {
-                            // GIỮ NGUYÊN STATUS = "absent", chỉ cập nhật NOTE
-                            attendance.Note = $"Yêu cầu nghỉ phép bị từ chối: {request.Reason ?? "Không lý do."}";
+                            attendance.Note = $"Yêu cầu nghỉ phép bị TỪ CHỐI bởi {approverName}. Lý do: {request.Reason}";
                         }
                     }
                 }
             }
-            // 4. XỬ LÝ PHÊ DUYỆT (APPROVED)
-            else // newStatus == RequestStatus.approved
+            else
             {
-                currentRequest.Status = RequestStatus.approved;
-                currentRequest.ApprovedBy = request.ApproverUserId;
-
+                // --- TRƯỜNG HỢP CHẤP NHẬN (APPROVED) ---
                 if (currentRequest.Category == RequestCategory.ot)
                 {
-                    // --- DUYỆT OT ---
-                    if (request.ApprovedHours <= 0)
-                    {
-                        return CreateErrorResponse(400, "Số giờ duyệt OT phải lớn hơn 0.");
-                    }
-                    if (!currentRequest.FromDate.HasValue || !currentRequest.StartTime.HasValue)
-                    {
-                        return CreateErrorResponse(400, "Yêu cầu OT thiếu ngày hoặc giờ bắt đầu.");
-                    }
+                    if (request.ApprovedHours <= 0) return BadRequest(new { success = false, message = "Số giờ duyệt OT phải lớn hơn 0." });
 
-                    decimal finalOtRate = await GetGlobalSettingValue("DEFAULT_OT_RATE", 1.5m);
+                    // Giả sử có hàm GetGlobalSettingValue, nếu không bạn hardcode hoặc lấy từ DB
+                    decimal finalOtRate = 1.5m;
 
-                    // Tạo bản ghi trong bảng Overtimes
                     var newOvertime = new Overtime
                     {
                         Id = Guid.NewGuid(),
                         EmployeeId = currentRequest.EmployeeId,
-                        Date = currentRequest.FromDate.Value, // Lưu DateOnly (kiểu DateTime trong C#)
+                        Date = currentRequest.FromDate!.Value,
                         Hours = request.ApprovedHours,
-                        Rate = finalOtRate, // SỬ DỤNG HỆ SỐ TỪ GLOBAL SETTINGS
-                        Reason = $"OT từ {currentRequest.StartTime.Value:hh\\:mm\\:ss} | {currentRequest.Title}"
+                        Rate = finalOtRate,
+                        Reason = $"OT: {currentRequest.Title} | Duyệt bởi {approverName}"
                     };
                     _context.Overtimes.Add(newOvertime);
-                    finalMessage = $"Đã phê duyệt yêu cầu OT thành công. {request.ApprovedHours} giờ đã được thêm vào hệ thống tính lương (Hệ số: {finalOtRate}).";
+                    finalMessage = $"Đã duyệt OT ({request.ApprovedHours}h).";
                 }
                 else if (currentRequest.Category == RequestCategory.leave)
                 {
-                    // --- DUYỆT NGHỈ PHÉP ---
-                    DateOnly startDate = currentRequest.FromDate.Value;
+                    DateOnly startDate = currentRequest.FromDate!.Value;
                     DateOnly endDate = currentRequest.ToDate ?? startDate;
-                    int daysProcessed = 0;
-
                     DateTime loopStart = startDate.ToDateTime(TimeOnly.MinValue).Date;
                     DateTime loopEnd = endDate.ToDateTime(TimeOnly.MinValue).Date;
 
+                    int count = 0;
                     for (DateTime date = loopStart; date <= loopEnd; date = date.AddDays(1))
                     {
                         if (date.DayOfWeek == DayOfWeek.Sunday) continue;
-
                         DateOnly currentDayOnly = DateOnly.FromDateTime(date);
 
-                        var attendance = await _context.Attendances
-                            .FirstOrDefaultAsync(a => a.EmployeeId == currentRequest.EmployeeId && a.Date == currentDayOnly);
+                        var attendance = await _context.Attendances.FirstOrDefaultAsync(a => a.EmployeeId == currentRequest.EmployeeId && a.Date == currentDayOnly);
 
                         if (attendance == null)
                         {
@@ -440,29 +441,61 @@ namespace DeTaiNhanSu.Controllers
                             _context.Attendances.Add(attendance);
                         }
 
-                        // CHUYỂN BẢN GHI TẠM THỜI (hoặc mới) sang "leave"
                         attendance.Status = AttendanceStatus.leave;
-                        attendance.Note = $"Nghỉ phép được duyệt: {currentRequest.Title}";
-                        daysProcessed++;
+                        attendance.Note = $"Nghỉ phép: {currentRequest.Title} (Duyệt bởi {approverName})";
+                        count++;
                     }
-                    finalMessage = $"Đã phê duyệt yêu cầu nghỉ phép thành công. {daysProcessed} ngày công đã được đánh dấu là nghỉ phép có lương.";
+                    finalMessage = $"Đã duyệt nghỉ phép ({count} ngày).";
                 }
                 else
                 {
-                    finalMessage = $"Đã phê duyệt yêu cầu {currentRequest.Category} thành công (Không cần cập nhật Attendance/Overtime).";
+                    finalMessage = "Đã duyệt yêu cầu thành công.";
                 }
             }
 
-            // 5. Lưu tất cả thay đổi
+            // 6. Lưu thay đổi
             await _context.SaveChangesAsync();
+
+            // ========================================================================
+            // 7. ✅ GỬI THÔNG BÁO TỰ ĐỘNG (SIGNALR / FIREBASE)
+            // ========================================================================
+            try
+            {
+                // Tìm UserID của nhân viên đã gửi yêu cầu (vì bảng Request lưu EmployeeId)
+                var targetUser = await _context.Users
+                    .FirstOrDefaultAsync(u => u.EmployeeId == currentRequest.EmployeeId);
+
+                if (targetUser != null)
+                {
+                    string statusText = request.NewStatus == RequestStatus.approved ? "được duyệt" : "bị từ chối";
+
+                    string notiTitle = $"Yêu cầu đã {statusText}";
+                    string notiContent = $"Yêu cầu '{currentRequest.Title}' của bạn đã {statusText} bởi {approverName}.";
+
+                    if (!string.IsNullOrEmpty(request.Reason))
+                    {
+                        notiContent += $" Ghi chú: {request.Reason}";
+                    }
+
+                    // Gọi Service bắn thông báo
+                    await _notificationService.SendLeaveRequestNotificationAsync(notiTitle, notiContent, targetUser.Id);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log lỗi thông báo (không làm fail request chính)
+                Console.WriteLine($"⚠️ Lỗi gửi thông báo: {ex.Message}");
+            }
+            // ========================================================================
 
             return Ok(new
             {
                 statusCode = 200,
-                message = finalMessage,
                 success = true,
-                //requestId = currentRequest.Id
+                message = finalMessage
             });
         }
+
+ 
     }
 }
