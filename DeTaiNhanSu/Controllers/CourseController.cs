@@ -331,7 +331,7 @@ namespace DeTaiNhanSu.Controllers
         // }
 
         [HttpGet]
-       [Authorize(Roles = "HR, Admin")]
+       [Authorize(Roles = "HR, Admin, Employee")]
         public async Task<IActionResult> Search(
     [FromQuery] string? q,
     [FromQuery] Guid? employeeId, 

@@ -153,7 +153,7 @@ namespace DeTaiNhanSu.Controllers
             }
 
             await _context.SaveChangesAsync();
-            return Ok(new { Success = true, Message = $"Check-in thành công. Trạng thái: {status}" });
+            return Ok(new { statusCode = 200, Success = true, Message = $"Check-in thành công. Trạng thái: {status}" });
         }
 
 
@@ -212,7 +212,7 @@ namespace DeTaiNhanSu.Controllers
             }
 
             await _context.SaveChangesAsync();
-            return Ok(new { Success = true, Message = "Check-out thành công!" });
+            return Ok(new { statusCode = 200, Success = true, Message = "Check-out thành công!" });
         }
 
 

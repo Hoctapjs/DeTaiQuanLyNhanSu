@@ -1,15 +1,16 @@
 ﻿using DeTaiNhanSu.DbContextProject;
-using DeTaiNhanSu.Models;
 using DeTaiNhanSu.Enums;
+using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services.Notification;
 using Microsoft.AspNetCore.Mvc;
-using System;
-using System.Linq.Dynamic.Core;
 using Microsoft.EntityFrameworkCore;
-using System.Linq.Dynamic.Core.Exceptions;
-using System.Linq;
+using System;
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using System.Globalization;
+using System.Linq;
+using System.Linq.Dynamic.Core;
+using System.Linq.Dynamic.Core.Exceptions;
+using System.Threading.Tasks;
 
 namespace DeTaiNhanSu.Controllers
 {
@@ -52,7 +53,12 @@ namespace DeTaiNhanSu.Controllers
     public class PayrollController : ControllerBase
     {
         private readonly AppDbContext _context;
-        public PayrollController(AppDbContext context) => _context = context;
+        private readonly INotificationService _notificationService;
+        public PayrollController(AppDbContext context, INotificationService notificationService)
+        {
+            _context = context;
+            _notificationService = notificationService;
+        }
 
         // Phương thức hỗ trợ tạo phản hồi lỗi nhất quán
         private IActionResult CreateErrorResponse(int statusCode, string message)
@@ -895,6 +901,45 @@ namespace DeTaiNhanSu.Controllers
                 payrollRun.Status = PayrollRunStatus.processed;
             }
             await _context.SaveChangesAsync();
+
+
+            // 6. Gửi thông báo
+            try
+            {
+                if (processedCount > 0)
+                {
+                    // A. Lấy danh sách EmployeeId vừa được tính lương
+                    // (employeesToRun là danh sách nhân viên active đã lấy ở Step 3)
+                    var processedEmployeeIds = employeesToRun.Select(e => e.Id).ToList();
+
+                    // B. Tìm UserID tương ứng với các EmployeeId này
+                    // (Vì bảng Users có cột EmployeeId, ta cần map qua để biết gửi cho tài khoản nào)
+                    var targetUserIds = await _context.Users
+                        .Where(u => u.EmployeeId != null && processedEmployeeIds.Contains(u.EmployeeId))
+                        .Select(u => u.Id)
+                        .ToListAsync();
+
+                    if (targetUserIds.Any())
+                    {
+                        // Định dạng lại tháng cho đẹp (Ví dụ: 2025-10 -> 10/2025)
+                        string formattedMonth = startDate.ToString("MM/yyyy");
+
+                        string title = $"Phiếu lương tháng {formattedMonth}";
+                        string content = $"Lương tháng {formattedMonth} của bạn đã được chốt. Vui lòng kiểm tra chi tiết trong ứng dụng.";
+
+                        // Gọi Service bắn thông báo hàng loạt (SignalR + Firebase)
+                        await _notificationService.SendPayrollNotificationAsync(title, content, targetUserIds);
+
+                        Console.WriteLine($"✅ Đã gửi thông báo lương cho {targetUserIds.Count} nhân viên.");
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // Log lỗi thông báo nhưng KHÔNG làm fail API chính (vì lương đã lưu rồi)
+                Console.WriteLine($"⚠️ Lỗi gửi thông báo lương: {ex.Message}");
+            }
+            // ========================================================================
 
             return Ok(new
             {

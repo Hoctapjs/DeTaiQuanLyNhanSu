@@ -180,7 +180,7 @@ namespace DeTaiNhanSu.Services.Notification
             var notification = new Models.Notification
             {
                 Id = Guid.NewGuid(),
-                Type = "payroll",
+                Type = "new",
                 Title = title,
                 Content = content,
                 CreatedAt = GetVietnamTime(), // Sử dụng thời gian Việt Nam
@@ -405,6 +405,91 @@ namespace DeTaiNhanSu.Services.Notification
             }
         }
 
-      
+        public async Task SendLeaveRequestNotificationAsync(string title, string content, Guid targetUserId)
+        {
+            // 1. Tạo Notification (Lưu ý: KHÔNG gán UserId ở đây vì Model không có)
+            var notification = new Models.Notification
+            {
+                Id = Guid.NewGuid(),
+                Title = title,
+                Content = content,
+                Type = "new", // Loại thông báo
+                CreatedAt = GetVietnamTime(),
+                ActorId = null, // Có thể truyền ID người duyệt vào đây nếu muốn
+                ActionUrl = null
+            };
+
+            // 2. Tạo liên kết trong bảng UserNotification (Đây mới là chỗ lưu người nhận)
+            var userNotification = new UserNotification
+            {
+                // Giả định UserNotification có Id tự sinh hoặc bạn new Guid()
+                NotificationId = notification.Id,
+                UserId = targetUserId,
+                ReadAt = null // Chưa đọc
+            };
+
+            // 3. Lưu vào Database (Lưu cả 2 bảng)
+            _context.Notifications.Add(notification);
+            _context.UserNotifications.Add(userNotification);
+
+            await _context.SaveChangesAsync();
+
+            // ================================================================
+            // 4. Gửi Realtime (SignalR + Firebase)
+            // ================================================================
+
+            // Tạo object dữ liệu để gửi đi (Mapping cho khớp với App Client)
+            var notificationPayload = new
+            {
+                id = notification.Id,
+                title = notification.Title,
+                content = notification.Content,
+                type = notification.Type,
+                createdAt = notification.CreatedAt,
+                isRead = false // Mặc định là chưa đọc
+            };
+
+            string targetUserIdString = targetUserId.ToString();
+
+            // A. Tìm thiết bị của user
+            var userDevices = await _context.DeviceStatuses
+                .Where(d => d.DeviceId == targetUserIdString)
+                .ToListAsync();
+
+            // B. Tách luồng Online (SignalR)
+            var onlineConnectionIds = userDevices
+                .Where(d => d.IsAppOpen && !string.IsNullOrEmpty(d.ConnectionId))
+                .Select(d => d.ConnectionId)
+                .ToList();
+
+            if (onlineConnectionIds.Any())
+            {
+                // Gửi SignalR
+                await _hubContext.Clients.Clients(onlineConnectionIds)
+                    .SendAsync("ReceiveNotification", notificationPayload);
+
+                Console.WriteLine($"✅ [SignalR] Sent to user {targetUserId}");
+            }
+
+            // C. Tách luồng Offline (Firebase)
+            // Logic: Nếu không có thiết bị nào online thì gửi Firebase
+            if (!onlineConnectionIds.Any())
+            {
+                var fcmTokens = await _context.FcmTokens
+                    .Where(t => t.UserId == targetUserIdString)
+                    .Select(t => t.Token)
+                    .ToListAsync();
+
+                if (fcmTokens.Any())
+                {
+                    // Gửi Firebase (Cần đảm bảo hàm SendNotificationAsync nhận đúng Model hoặc Payload)
+                    // Vì hàm SendNotificationAsync của bạn nhận Model Notification, ta truyền notification vào
+                    await _firebaseService.SendNotificationAsync(notification, fcmTokens);
+
+                    Console.WriteLine($"🔥 [Firebase] Sent to user {targetUserId}");
+                }
+            }
+        }
+
     }
 }
