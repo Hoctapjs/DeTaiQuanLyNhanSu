@@ -1,13 +1,14 @@
 ﻿using DeTaiNhanSu.DbContextProject;
-using DeTaiNhanSu.Models;
 using DeTaiNhanSu.Enums;
+using DeTaiNhanSu.Models;
+using DocumentFormat.OpenXml.InkML;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Linq.Dynamic.Core;
 using System.Linq.Dynamic.Core.Exceptions;
-using System.Collections.Generic;
 using System.Threading.Tasks;
 
 // NOTE: Cần thêm các using cho các Models còn thiếu (Position, Department, User, Contract, AppDbContext)
@@ -61,6 +62,51 @@ namespace DeTaiNhanSu.Controllers
             });
         }
 
+
+        // Thêm struct lưu trữ cấu hình
+        private struct AttendanceConfig
+        {
+            public int CheckinToleranceMinutes { get; set; }
+            public TimeOnly AbsentMarkThresholdTime { get; set; }
+            public int EarlyLeaveToleranceMinutes { get; set; }
+            public int SevereEarlyLeaveMinutes { get; set; }
+            public TimeOnly AutoCheckoutTime { get; set; }
+        }
+
+        // Hàm đọc cấu hình từ GlobalSettings
+        private async Task<AttendanceConfig> GetAttendanceConfig(CancellationToken ct)
+        {
+            var settings = await _context.GlobalSettings.AsNoTracking()
+                .Where(s => s.Key.StartsWith("CHECKIN_") || s.Key.StartsWith("ABSENT_") || s.Key.StartsWith("EARLY_") || s.Key.StartsWith("SEVERE_") || s.Key == "AUTO_CHECKOUT_TIME")
+                .ToDictionaryAsync(s => s.Key, s => s.Value, ct);
+
+            int ParseInt(string key, int defaultValue) =>
+                settings.TryGetValue(key, out var val) && int.TryParse(val, out var result) ? result : defaultValue;
+
+            TimeOnly ParseTime(string key, TimeOnly defaultValue) =>
+                settings.TryGetValue(key, out var val) && TimeOnly.TryParse(val, out var result) ? result : defaultValue;
+
+            return new AttendanceConfig
+            {
+                CheckinToleranceMinutes = ParseInt("CHECKIN_TOLERANCE_MINUTES", 5),
+                AbsentMarkThresholdTime = ParseTime("ABSENT_MARK_THRESHOLD_TIME", new TimeOnly(10, 0, 0)),
+                EarlyLeaveToleranceMinutes = ParseInt("EARLY_LEAVE_TOLERANCE_MINUTES", 5),
+                SevereEarlyLeaveMinutes = ParseInt("SEVERE_EARLY_LEAVE_MINUTES", 10),
+                AutoCheckoutTime = ParseTime("AUTO_CHECKOUT_TIME", new TimeOnly(23, 59, 0))
+            };
+        }
+
+        // Hàm lấy Ca làm việc (ShiftTemplate) dựa trên Lịch làm việc (WorkSchedule)
+        private async Task<ShiftTemplate?> GetEmployeeShiftForToday(Guid empId, DateOnly today, CancellationToken ct = default)
+        {
+            var schedule = await _context.WorkSchedules
+                .AsNoTracking()
+                .Include(ws => ws.ShiftTemplate)
+                .FirstOrDefaultAsync(ws => ws.EmployeeId == empId && ws.Date == today, ct);
+
+            return schedule?.ShiftTemplate;
+        }
+
         // =================================================================
         //                 PHƯƠNG THỨC HỖ TRỢ DB/LOGIC
         // =================================================================
@@ -90,39 +136,46 @@ namespace DeTaiNhanSu.Controllers
 
         // ------------------- CHECK-IN -------------------
         [HttpPost("checkin")]
-        public async Task<IActionResult> Checkin([FromBody] CheckinRequest request)
+        public async Task<IActionResult> Checkin([FromBody] CheckinRequest request, CancellationToken ct = default)
         {
             if (!Guid.TryParse(request.EmployeeId, out var empId)) return CreateErrorResponse(400, "EmployeeId không hợp lệ.");
             var (today, vnNowTime) = GetVnTime();
 
-            // 1. KIỂM TRA NGÀY NGHỈ PHÉP ĐÃ DUYỆT TRƯỚC HẾT
+            // 1. LẤY CẤU HÌNH & CA LÀM VIỆC
+            var config = await GetAttendanceConfig(ct);
+            var shift = await GetEmployeeShiftForToday(empId, today, ct);
+
+            // 2. KIỂM TRA LỊCH LÀM VIỆC & NGÀY NGHỈ
             if (await IsDayApprovedForLeave(empId, today))
-            {
                 return CreateErrorResponse(400, "Bạn đã được duyệt đơn nghỉ phép hôm nay nên không cần checkin.");
-            }
 
-            // 2. KIỂM TRA WIFI TỪ DB
-            var allowedWifis = await GetAllowedWifisFromDb();
-            if (!allowedWifis.Any()) return CreateErrorResponse(500, "Lỗi cấu hình: Danh sách WiFi công ty chưa được thiết lập.");
-
-            var isAllowed = allowedWifis.Any(w => string.Equals(w.WifiName, request.WifiName, StringComparison.OrdinalIgnoreCase) && string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase));
-            if (!isAllowed) return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty. Vui lòng kết nối để checkin.");
-
-            // 3. Kiểm tra check-in hôm nay
-            var existing = await _context.Attendances
-                .FirstOrDefaultAsync(a => a.EmployeeId == empId && a.Date == today);
-
-            if (existing != null)
+            if (shift == null)
             {
-                if (existing.Status == AttendanceStatus.absent)
-                    return CreateErrorResponse(400, "Hôm nay bạn đã bị đánh dấu vắng mặt. Nếu có lý do chính đáng, vui lòng liên hệ quản lý.");
-                if (existing.CheckIn != null)
-                    return CreateErrorResponse(400, "Bạn đã check-in hôm nay rồi!");
+                // Kiểm tra ngày nghỉ cuối tuần từ cấu hình
+                var weekendSetting = await _context.GlobalSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == "WEEKEND_DAYS", ct);
+                string weekendValue = weekendSetting?.Value ?? "Saturday,Sunday";
+                var weekendDays = weekendValue.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                                             .Select(s => Enum.TryParse(s, true, out DayOfWeek day) ? (DayOfWeek?)day : null)
+                                             .Where(d => d.HasValue).Select(d => d.Value).ToList();
+
+                if (weekendDays.Contains(today.DayOfWeek))
+                    return CreateErrorResponse(400, $"Hôm nay là {today.DayOfWeek}, ngày nghỉ cuối tuần theo cấu hình.");
+
+                return CreateErrorResponse(400, "Không tìm thấy lịch làm việc được xếp cho bạn hôm nay. Vui lòng liên hệ HR.");
             }
 
-            // 4. Xử lý Trạng thái
-            var start = new TimeOnly(8, 0, 0);
-            var lateThreshold = start.Add(TimeSpan.FromMinutes(5));
+            // 3. KIỂM TRA WIFI & TRẠNG THÁI (Giữ nguyên logic cũ nhưng thay config)
+            var allowedWifis = await GetAllowedWifisFromDb();
+            if (!allowedWifis.Any(w => string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase)))
+                return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty.");
+
+            var existing = await _context.Attendances.FirstOrDefaultAsync(a => a.EmployeeId == empId && a.Date == today, ct);
+            if (existing != null && existing.CheckIn != null)
+                return CreateErrorResponse(400, $"Bạn đã check-in hôm nay lúc {existing.CheckIn:HH:mm:ss} rồi!");
+
+            // 4. XỬ LÝ TRẠNG THÁI (Dùng Shift StartTime & Config Tolerance)
+            var shiftStartTime = shift.StartTime;
+            var lateThreshold = shiftStartTime.Add(TimeSpan.FromMinutes(config.CheckinToleranceMinutes));
 
             AttendanceStatus status;
             string note;
@@ -130,20 +183,19 @@ namespace DeTaiNhanSu.Controllers
             if (vnNowTime <= lateThreshold)
             {
                 status = AttendanceStatus.present;
-                note = $"Đúng giờ";
+                note = $"Đúng giờ - Ca: {shift.Code}";
             }
             else
             {
                 status = AttendanceStatus.late;
-                var lateMinutes = (int)(vnNowTime - start).TotalMinutes;
-                note = $"Đi muộn {lateMinutes} phút";
+                TimeSpan lateTime = vnNowTime > shiftStartTime ? vnNowTime - shiftStartTime : TimeSpan.Zero;
+                note = $"Đi muộn {(int)lateTime.TotalMinutes} phút - Ca: {shift.Code}";
             }
 
-            // Cập nhật hoặc thêm mới bản ghi
+            // 5. LƯU DATABASE
             if (existing == null)
             {
-                var attendance = new Attendance { Id = Guid.NewGuid(), EmployeeId = empId, Date = today, CheckIn = vnNowTime, Status = status, Note = note };
-                _context.Attendances.Add(attendance);
+                _context.Attendances.Add(new Attendance { Id = Guid.NewGuid(), EmployeeId = empId, Date = today, CheckIn = vnNowTime, Status = status, Note = note });
             }
             else
             {
@@ -152,79 +204,101 @@ namespace DeTaiNhanSu.Controllers
                 existing.Note = note;
             }
 
-            await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync(ct);
             return Ok(new { statusCode = 200, Success = true, Message = $"Check-in thành công. Trạng thái: {status}" });
         }
 
-
         // ------------------- CHECK-OUT -------------------
         [HttpPost("checkout")]
-        public async Task<IActionResult> Checkout([FromBody] CheckoutRequest request)
+        public async Task<IActionResult> Checkout([FromBody] CheckoutRequest request, CancellationToken ct = default)
         {
-            // 1. Khai báo và Kiểm tra cơ bản
-            if (!Guid.TryParse(request.EmployeeId, out var empId)) return CreateErrorResponse(400, "EmployeeId không hợp lệ hoặc bị thiếu.");
-
+            if (!Guid.TryParse(request.EmployeeId, out var empId)) return CreateErrorResponse(400, "EmployeeId không hợp lệ.");
             var (today, vnNowTime) = GetVnTime();
-            var endWork = new TimeOnly(17, 0, 0); // Giờ chuẩn: 17:00:00
 
-            var attendance = await _context.Attendances
-                .FirstOrDefaultAsync(a => a.EmployeeId == empId && a.Date == today);
+            // 1. LẤY CẤU HÌNH & CA LÀM VIỆC
+            var config = await GetAttendanceConfig(ct);
+            var shift = await GetEmployeeShiftForToday(empId, today, ct);
+
+            var attendance = await _context.Attendances.FirstOrDefaultAsync(a => a.EmployeeId == empId && a.Date == today, ct);
 
             if (attendance == null || attendance.CheckIn == null) return CreateErrorResponse(400, "Bạn chưa check-in hôm nay!");
             if (attendance.CheckOut != null) return CreateErrorResponse(400, "Bạn đã check-out rồi!");
+            if (shift == null) return CreateErrorResponse(500, "Lỗi: Không tìm thấy ca làm việc.");
 
-            // 2. Kiểm tra Wi-Fi TỪ DB
+            // 2. CHECK WIFI (Giữ nguyên)
             var allowedWifis = await GetAllowedWifisFromDb();
             if (!allowedWifis.Any()) return CreateErrorResponse(500, "Lỗi cấu hình: Danh sách WiFi công ty chưa được thiết lập.");
 
             var isAllowed = allowedWifis.Any(w => string.Equals(w.WifiName, request.WifiName, StringComparison.OrdinalIgnoreCase) && string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase));
             if (!isAllowed) return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty. Vui lòng kết nối để checkout");
 
+            // 3. XỬ LÝ VỀ SỚM / OT (Dựa trên Shift EndTime & Config)
+            TimeOnly shiftEndTime = shift.EndTime;
+            string checkoutNote = "";
 
-            // 3. XỬ LÝ VỀ SỚM (Chỉ ghi chú phạt) và OT
-            TimeSpan overTimeDuration = vnNowTime - endWork;
+            // Ngưỡng cho phép về sớm (Ví dụ: EndTime - 5 phút)
+            var earlyLeaveAllowedTime = shiftEndTime.Add(TimeSpan.FromMinutes(-config.EarlyLeaveToleranceMinutes));
 
-            if (overTimeDuration.TotalMinutes > 5)
+            // Ngưỡng tính OT (Ví dụ: EndTime + 5 phút)
+            var otThresholdTime = shiftEndTime.Add(TimeSpan.FromMinutes(config.EarlyLeaveToleranceMinutes));
+
+            if (vnNowTime < earlyLeaveAllowedTime)
             {
-                // Logic OT
+                // VỀ SỚM
+                var earlyDuration = shiftEndTime - vnNowTime;
+                var minutesEarly = Math.Round(earlyDuration.TotalMinutes);
+
+                if (earlyDuration.TotalMinutes > config.SevereEarlyLeaveMinutes)
+                    checkoutNote += $" | Về sớm {minutesEarly} phút [PHẠT NẶNG]";
+                else
+                    checkoutNote += $" | Về sớm {minutesEarly} phút";
             }
-            else if (vnNowTime < endWork)
+            else if (vnNowTime > otThresholdTime)
             {
-                // XỬ LÝ VỀ SỚM
-                var earlyLeaveDuration = endWork - vnNowTime;
-                var minutesEarly = Math.Round(earlyLeaveDuration.TotalMinutes);
-
-                // QUY TẮC PHẠT: Về sớm hơn 10 phút là PHẠT NẶNG (Trừ 0.5 công)
-                if (earlyLeaveDuration.TotalMinutes > 10)
-                {
-                    attendance.Note = (attendance.Note ?? "") + $" | Về sớm {minutesEarly} phút. [PHẠT NẶNG - TRỪ 0.5 CÔNG]";
-                }
+                // TĂNG CA (OT)
+                var otDuration = vnNowTime - shiftEndTime;
+                var minutesOT = Math.Round(otDuration.TotalMinutes);
+                checkoutNote += $" | Về trễ {minutesOT} phút";
             }
 
-
-            // 4. Cập nhật CheckOut và Trạng thái cuối cùng
+            // 4. CẬP NHẬT
             attendance.CheckOut = vnNowTime;
-
-            // Nếu status là 'present' (đi đúng giờ), chuyển thành 'completed').
             if (attendance.Status == AttendanceStatus.present)
             {
                 attendance.Status = AttendanceStatus.completed;
             }
+            else if (attendance.Status == AttendanceStatus.leave)
+            {
+                attendance.Status = AttendanceStatus.leave;
+            }
+            else if (attendance.Status == AttendanceStatus.late)
+            {
+                attendance.Status = AttendanceStatus.late;
+            }
+            else
+            {
+                attendance.Status = AttendanceStatus.absent;
+            }    
+            attendance.Note = (attendance.Note ?? "") + checkoutNote;
 
-            await _context.SaveChangesAsync();
+            await _context.SaveChangesAsync(ct);
             return Ok(new { statusCode = 200, Success = true, Message = "Check-out thành công!" });
         }
 
 
         // ------------------- Tự động kiểm tra nhân viên có vắng mặt ko -------------------
         [HttpPost("mark-absent")]
-        public async Task<IActionResult> MarkAbsent()
+        public async Task<IActionResult> MarkAbsent(CancellationToken ct = default)
         {
+            var (today, vnNowTime) = GetVnTime();
 
-            var (today, _) = GetVnTime();
+            // Lấy giờ giới hạn từ GlobalSettings
+            var config = await GetAttendanceConfig(ct);
+            var absentThresholdTime = config.AbsentMarkThresholdTime;
+
             var weekendSetting = await _context.GlobalSettings
-                                .AsNoTracking()
-                                .FirstOrDefaultAsync(s => s.Key == "WEEKEND_DAYS");
+                 .AsNoTracking()
+                 .FirstOrDefaultAsync(s => s.Key == "WEEKEND_DAYS");
 
             // Phân tích các ngày nghỉ (Mặc định: T7, CN nếu không tìm thấy cấu hình)
             string weekendValue = weekendSetting?.Value ?? "Saturday, Sunday";
@@ -239,52 +313,103 @@ namespace DeTaiNhanSu.Controllers
             {
                 return Ok(new { Success = true, Message = "Hệ thống không đánh dấu vắng mặt vào ngày nghỉ cuối tuần (dựa trên cấu hình GlobalSettings)." });
             }
-            var employees = await _context.Employees.Where(e => e.Status == EmployeeStatus.active).ToListAsync();
-            int markedAbsentCount = 0;
+            var activeEmployees = await _context.Employees.Where(e => e.Status == EmployeeStatus.active).ToListAsync(ct);
+            int markedCount = 0;
 
-            foreach (var emp in employees)
+            foreach (var emp in activeEmployees)
             {
-                // 1. KIỂM TRA HỢP ĐỒNG & NGHỈ PHÉP ĐÃ DUYỆT
-                bool hasValidContract = await _context.Contracts.AnyAsync(c => c.EmployeeId == emp.Id && c.Status == ContractStatus.active);
-                bool isApprovedLeaveDay = await IsDayApprovedForLeave(emp.Id, today);
+                // Lấy lịch làm việc
+                var schedule = await _context.WorkSchedules
+                    .AsNoTracking()
+                    .Include(ws => ws.ShiftTemplate)
+                    .FirstOrDefaultAsync(ws => ws.EmployeeId == emp.Id && ws.Date == today, ct);
 
+                if (schedule == null) continue;
 
-                if (hasValidContract && !isApprovedLeaveDay) // CHỈ ĐÁNH DẤU NẾU LÀ NGÀY LÀM VIỆC BÌNH THƯỜNG
+                // CHỈ XỬ LÝ nếu giờ hiện tại >= giờ ngưỡng VÀ ca làm việc bắt đầu <= giờ ngưỡng
+                if (vnNowTime >= absentThresholdTime && schedule.ShiftTemplate.StartTime <= absentThresholdTime)
                 {
-                    // 2. Kiểm tra đã có bất kỳ bản ghi chấm công nào chưa (Không cần kiểm tra Leave ở đây nữa)
-                    bool hasAttendance = await _context.Attendances.AnyAsync(a => a.EmployeeId == emp.Id && a.Date == today);
-
-                    if (!hasAttendance)
+                    // Kiểm tra chưa check-in và không có phép
+                    bool isApprovedLeave = await IsDayApprovedForLeave(emp.Id, today);
+                    if (!isApprovedLeave)
                     {
-                        // 3. Thêm bản ghi vắng mặt (absent)
-                        _context.Attendances.Add(new Attendance
+                        var att = await _context.Attendances.FirstOrDefaultAsync(a => a.EmployeeId == emp.Id && a.Date == today, ct);
+                        if (att == null || att.CheckIn == null)
                         {
-                            Id = Guid.NewGuid(),
-                            EmployeeId = emp.Id,
-                            Date = today,
-                            Status = AttendanceStatus.absent,
-                            Note = "Nghỉ không phép (Tự động đánh dấu cuối ngày)"
-                        });
-                        markedAbsentCount++;
+                            if (att == null)
+                            {
+                                _context.Attendances.Add(new Attendance
+                                {
+                                    Id = Guid.NewGuid(),
+                                    EmployeeId = emp.Id,
+                                    Date = today,
+                                    Status = AttendanceStatus.absent,
+                                    Note = $"Vắng (Ca {schedule.ShiftTemplate.Code} - Auto {vnNowTime:HH:mm})"
+                                });
+                            }
+                            else
+                            {
+                                att.Status = AttendanceStatus.absent;
+                                att.Note = $"Vắng (Ca {schedule.ShiftTemplate.Code} - Auto {vnNowTime:HH:mm})";
+                            }
+                            markedCount++;
+                        }
                     }
                 }
             }
-
-            await _context.SaveChangesAsync();
-
-            return Ok(new
-            {
-                Success = true,
-                Message = $"Đã đánh dấu vắng mặt cho {markedAbsentCount} nhân viên chưa check-in và có hợp đồng còn hiệu lực."
-            });
+            await _context.SaveChangesAsync(ct);
+            return Ok(new { Success = true, Message = $"Đã đánh dấu vắng cho {markedCount} nhân viên." });
         }
         [HttpGet("status/{employeeId}")]
         public async Task<IActionResult> GetAttendanceStatus(Guid employeeId)
         {
-            var (today, _) = GetVnTime();
+            var (today, vnNowTime) = GetVnTime();
 
+            // 1. [MỚI] Lấy thông tin Ca làm việc dự kiến
+            // (Hàm này đã được thêm vào AttendanceController ở bước trước)
+            var shift = await GetEmployeeShiftForToday(employeeId, today);
+
+            // 2. [MỚI] Nếu không có lịch, kiểm tra xem có phải ngày nghỉ cuối tuần không
+            if (shift == null)
+            {
+                var weekendSetting = await _context.GlobalSettings.AsNoTracking().FirstOrDefaultAsync(s => s.Key == "WEEKEND_DAYS");
+                string weekendValue = weekendSetting?.Value ?? "Saturday,Sunday";
+                var weekendDays = weekendValue.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+                                             .Select(s => Enum.TryParse(s, true, out DayOfWeek day) ? (DayOfWeek?)day : null)
+                                             .Where(d => d.HasValue).Select(d => d.Value).ToList();
+
+                if (weekendDays.Contains(today.DayOfWeek))
+                {
+                    return Ok(new
+                    {
+                        Success = true,
+                        Status = "Weekend",
+                        Message = $"Hôm nay là {today.DayOfWeek}, ngày nghỉ cuối tuần."
+                    });
+                }
+
+                return Ok(new
+                {
+                    Success = true,
+                    Status = "NoSchedule",
+                    Message = "Không có lịch làm việc được xếp hôm nay."
+                });
+            }
+
+            // Chuẩn bị thông tin ca để trả về cho Mobile App hiển thị
+            var shiftInfo = new
+            {
+                Code = shift.Code,
+                Name = shift.Name,
+                StartTime = shift.StartTime.ToString("HH:mm"),
+                EndTime = shift.EndTime.ToString("HH:mm")
+            };
+
+            // 3. Lấy thông tin chấm công thực tế
             var attendance = await _context.Attendances
                 .FirstOrDefaultAsync(a => a.EmployeeId == employeeId && a.Date == today);
+
+            // --- CÁC TRƯỜNG HỢP TRẢ VỀ ---
 
             if (attendance == null)
             {
@@ -292,7 +417,8 @@ namespace DeTaiNhanSu.Controllers
                 {
                     Success = true,
                     Status = "NotCheckedIn",
-                    Message = "Bạn chưa check-in hôm nay."
+                    Message = $"Bạn chưa check-in. Ca {shift.Code} bắt đầu lúc {shiftInfo.StartTime}.",
+                    Shift = shiftInfo // [MỚI] Trả về thông tin ca
                 });
             }
 
@@ -302,10 +428,10 @@ namespace DeTaiNhanSu.Controllers
                 {
                     Success = true,
                     Status = AttendanceStatus.leave.ToString(),
-                    Message = "Bạn đã được duyệt nghỉ phép hôm nay nên không cần checkin."
+                    Message = "Bạn đã được duyệt nghỉ phép hôm nay.",
+                    Shift = shiftInfo
                 });
             }
-
 
             if (attendance.Status == AttendanceStatus.absent)
             {
@@ -313,7 +439,8 @@ namespace DeTaiNhanSu.Controllers
                 {
                     Success = true,
                     Status = AttendanceStatus.absent.ToString(),
-                    Message = "Bạn đã bị đánh dấu vắng mặt hôm nay."
+                    Message = "Bạn đã bị đánh dấu vắng mặt hôm nay.",
+                    Shift = shiftInfo
                 });
             }
 
@@ -323,46 +450,43 @@ namespace DeTaiNhanSu.Controllers
                 {
                     Success = true,
                     Status = "CheckedIn",
-                    Message = "Bạn đã check-in nhưng chưa check-out."
+                    Message = $"Đã check-in ({attendance.CheckIn:HH:mm}). Ca kết thúc lúc {shiftInfo.EndTime}.",
+                    Shift = shiftInfo
                 });
             }
 
             return Ok(new
             {
                 Success = true,
-                Status = attendance.Status.ToString(),
-                Message = "Bạn đã hoàn tất check-in & check-out hôm nay."
+                Status = attendance.Status.ToString(), // Completed/Late/Present
+                Message = "Bạn đã hoàn tất chấm công hôm nay.",
+                Shift = shiftInfo
             });
         }
-
         [HttpPost("auto-checkout")]
-        public async Task<IActionResult> AutoCheckout()
+        public async Task<IActionResult> AutoCheckout(CancellationToken ct = default)
         {
             var (today, _) = GetVnTime();
-            var autoCheckoutTime = new TimeOnly(23, 59, 0);
 
-            var pendingAttendances = await _context.Attendances
-                .Where(a => a.Date == today && a.CheckOut == null)
-                .ToListAsync();
+            // Lấy giờ auto-checkout từ config
+            var config = await GetAttendanceConfig(ct);
+            var autoCheckoutTime = config.AutoCheckoutTime;
 
-            if (!pendingAttendances.Any())
-                return Ok(new { Success = true, Message = "Không có nhân viên nào cần auto-checkout." });
+            var pending = await _context.Attendances
+                .Where(a => a.Date == today && a.CheckOut == null && a.Status != AttendanceStatus.absent)
+                .ToListAsync(ct);
 
-            foreach (var attendance in pendingAttendances)
+            if (!pending.Any()) return Ok(new { Success = true, Message = "Không có nhân viên cần auto-checkout." });
+
+            foreach (var att in pending)
             {
-                if (attendance.Status != AttendanceStatus.absent)
-                {
-                    attendance.CheckOut = autoCheckoutTime;
-
-                    if (attendance.Status == AttendanceStatus.present)
-                        attendance.Status = AttendanceStatus.completed;
-
-                    attendance.Note = (attendance.Note ?? "") + " | Tự động check-out 23:59";
-                }
+                att.CheckOut = autoCheckoutTime;
+                if (att.Status == AttendanceStatus.present) att.Status = AttendanceStatus.completed;
+                att.Note = (att.Note ?? "") + $" | Auto-out {autoCheckoutTime:HH:mm}";
             }
 
-            await _context.SaveChangesAsync();
-            return Ok(new { Success = true, Message = $"Đã auto check-out {pendingAttendances.Count} nhân viên." });
+            await _context.SaveChangesAsync(ct);
+            return Ok(new { Success = true, Message = $"Auto check-out cho {pending.Count} nhân viên." });
         }
 
 
