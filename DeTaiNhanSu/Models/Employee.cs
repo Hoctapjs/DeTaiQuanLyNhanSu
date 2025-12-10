@@ -25,6 +25,7 @@ namespace DeTaiNhanSu.Models
         public ICollection<Attendance> Attendances { get; set; } = [];
         public ICollection<TrainingRecord> TrainingRecords { get; set; } = new List<TrainingRecord>();
 
-
+        public bool IsDeleted { get; set; } = false; // Mặc định là chưa xóa
+        public DateTime? DeletedAt { get; set; }
     }
 }

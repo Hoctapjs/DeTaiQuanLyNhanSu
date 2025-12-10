@@ -43,7 +43,7 @@ namespace DeTaiNhanSu.Controllers
             try
             {
                 if (current < 1) current = 1;
-                if (pageSize is < 1 or > 200) pageSize = 20;
+                if (pageSize is < 1 or > 1000) pageSize = 20;
 
                 var query = _db.WorkSchedules.AsNoTracking()
                     .Include(x => x.Employee)

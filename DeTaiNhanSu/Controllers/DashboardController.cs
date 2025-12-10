@@ -7,6 +7,8 @@ using System.Globalization;
 using System.Linq;
 using DeTaiNhanSu.Dtos.DashboardDtoFol;
 using DeTaiNhanSu.Models;
+using System.Linq.Dynamic.Core;
+using DocumentFormat.OpenXml;
 
 namespace DeTaiNhanSu.Controllers
 {
@@ -469,17 +471,50 @@ namespace DeTaiNhanSu.Controllers
 
                 // 3 + 4 thực thi các tác vụ thống kê và lấy kết quả
                 int totalDepartments = await _db.Departments.AsNoTracking().CountAsync(ct);
+
+                // tổng số hợp đồng sắp hết hạn
                 int expiringCount = await expiringQuery.CountAsync(ct);
 
+                // chấm công hôm nay
                 var attendanceStats = await GetAttendanceTodayAsync(workingEmployeeIds, workingCount, todayDO, ct);
+
+                // nghỉ phép trong tháng
                 var leaveStats = await GetLeaveStatsAsync(monthStart, monthEnd, ct);
+
+                // kỷ luật trong tháng
                 var disciplineStats = await GetDisciplineStatsAsync(monthStart, todayDO, ct);
+
+                // số khóa học
                 var courseStats = await GetCourseStatsAsync(utcNow, ct);
+
+                // lương phải trả cho kỳ gần nhất đang process hoặc locked
                 var salaryStats = await GetSalaryStatsAsync(ct);
+
+                // biểu đồ vuông thống kê chuyên cần theo trạng thái làm việc và điểm trung bình đào tạo tổng
                 var performanceStats = await GetPerformanceStatsAsync(monthStart, todayDO, ct);
+
+                // biến động nhân sự
                 var hiresQuitsChart = await GetHiresQuitsChartAsync(utcNow, ct);
+
+                // số nhân viên theo phòng ban
                 var employeesByDept = await GetDepartmentChartAsync(workingEmployeeIds, ct);
+
+                // hợp đồng sắp hết hạn
                 var expiringList = await GetExpiringContractsListAsync(expiringQuery, ct);
+
+                // hợp đồng mới hôm nay
+                var newContractsQuery = _db.Contracts.AsNoTracking()
+                    .Where(x => x.Status != ContractStatus.terminated);
+
+                var newContractsList = await GetNewContractsListAsync(newContractsQuery, ct);
+
+                // nhân viên chưa có hợp đồng
+                var noContractQuery = _db.Employees.AsNoTracking()
+                    .Where(e => e.Status == EmployeeStatus.active)
+                    .Where(e => !_db.Contracts.Any(c => c.EmployeeId == e.Id));
+
+                var noContractList = await GetNoContractEmployeesListAsync(noContractQuery, ct);
+
 
                 // === 5. Xây dựng Payload (DTO) ===
                 // Logic tính toán `notCheckedInYetCount` được đưa về đây
@@ -527,7 +562,9 @@ namespace DeTaiNhanSu.Controllers
                     disciplineStats = disciplineStats, // Đã là DTO
                     courseStats = courseStats,         // Đã là DTO
                     salaryStats = salaryStats,         // Đã là DTO
-                    performanceStats = performanceStats // Đã là DTO
+                    performanceStats = performanceStats, // Đã là DTO
+                    newContractsList = newContractsList,
+                    noContractList = noContractList
                 };
 
                 return StatusCode(StatusCodes.Status200OK, new
@@ -703,9 +740,65 @@ namespace DeTaiNhanSu.Controllers
             );
         }
 
+        //private async Task<PerformanceStatsDto> GetPerformanceStatsAsync(DateOnly monthStart, DateOnly todayDO, CancellationToken ct)
+        //{
+        //    // 1. Thống kê chuyên cần
+        //    var monthAttendanceStats = await _db.Attendances
+        //        .AsNoTracking()
+        //        .Where(a => a.Date >= monthStart && a.Date <= todayDO)
+        //        .GroupBy(a => a.Status)
+        //        .Select(g => new { Status = g.Key, Count = g.Count() })
+        //        .ToDictionaryAsync(k => k.Status, v => v.Count, ct);
+
+        //    // 2. Thống kê đào tạo
+        //    var allTrainingStats = await _db.TrainingRecords
+        //        .AsNoTracking()
+        //        .GroupBy(r => r.Status)
+        //        .Select(g => new { Status = g.Key, Count = g.Count() })
+        //        .ToDictionaryAsync(k => k.Status, v => v.Count, ct);
+
+        //    // 3. Điểm trung bình
+        //    var avgScore = await _db.TrainingRecords
+        //            .AsNoTracking()
+        //            .Where(r => r.Status == TrainingStatus.completed || r.Status == TrainingStatus.failed)
+        //            .AverageAsync(r => (decimal?)r.Score, ct);
+
+        //    // Xử lý kết quả chuyên cần
+        //    int perf_totalLate = monthAttendanceStats.GetValueOrDefault(AttendanceStatus.late, 0);
+        //    int perf_totalAbsent = monthAttendanceStats.GetValueOrDefault(AttendanceStatus.absent, 0);
+        //    int perf_totalOnTime = monthAttendanceStats.GetValueOrDefault(AttendanceStatus.present, 0) +
+        //                           monthAttendanceStats.GetValueOrDefault(AttendanceStatus.completed, 0);
+
+        //    // Xử lý kết quả đào tạo
+        //    int perf_trainCompleted = allTrainingStats.GetValueOrDefault(TrainingStatus.completed, 0);
+        //    int perf_trainFailed = allTrainingStats.GetValueOrDefault(TrainingStatus.failed, 0);
+        //    int perf_trainInProgress = allTrainingStats.GetValueOrDefault(TrainingStatus.in_progress, 0) +
+        //                               allTrainingStats.GetValueOrDefault(TrainingStatus.not_completed, 0);
+
+        //    decimal perf_trainAvgScore = Math.Round(avgScore ?? 0, 2);
+
+        //    // Build DTO
+        //    var attendancePayload = new
+        //    {
+        //        totalLate = perf_totalLate,
+        //        totalAbsent = perf_totalAbsent,
+        //        totalOnTime = perf_totalOnTime
+        //    };
+
+        //    var trainingPayload = new
+        //    {
+        //        completed = perf_trainCompleted,
+        //        failed = perf_trainFailed,
+        //        inProgress = perf_trainInProgress,
+        //        averageScore = perf_trainAvgScore
+        //    };
+
+        //    return new PerformanceStatsDto(attendancePayload, trainingPayload);
+        //}
+
         private async Task<PerformanceStatsDto> GetPerformanceStatsAsync(DateOnly monthStart, DateOnly todayDO, CancellationToken ct)
         {
-            // 1. Thống kê chuyên cần
+            // 1. Thống kê chuyên cần (Giữ nguyên logic query)
             var monthAttendanceStats = await _db.Attendances
                 .AsNoTracking()
                 .Where(a => a.Date >= monthStart && a.Date <= todayDO)
@@ -713,26 +806,59 @@ namespace DeTaiNhanSu.Controllers
                 .Select(g => new { Status = g.Key, Count = g.Count() })
                 .ToDictionaryAsync(k => k.Status, v => v.Count, ct);
 
-            // 2. Thống kê đào tạo
+            // đúng giờ 224 số lịch đúng giờ
+            // tất cả 224
+
+            // 2. Thống kê đào tạo (Giữ nguyên logic query)
             var allTrainingStats = await _db.TrainingRecords
                 .AsNoTracking()
                 .GroupBy(r => r.Status)
                 .Select(g => new { Status = g.Key, Count = g.Count() })
                 .ToDictionaryAsync(k => k.Status, v => v.Count, ct);
 
-            // 3. Điểm trung bình
+            // 3. Điểm trung bình (Giữ nguyên logic query)
             var avgScore = await _db.TrainingRecords
                     .AsNoTracking()
                     .Where(r => r.Status == TrainingStatus.completed || r.Status == TrainingStatus.failed)
                     .AverageAsync(r => (decimal?)r.Score, ct);
 
-            // Xử lý kết quả chuyên cần
+            // --- XỬ LÝ KẾT QUẢ CHUYÊN CẦN (CẬP NHẬT) ---
+
+            // trễ
             int perf_totalLate = monthAttendanceStats.GetValueOrDefault(AttendanceStatus.late, 0);
+
+            // vắng
             int perf_totalAbsent = monthAttendanceStats.GetValueOrDefault(AttendanceStatus.absent, 0);
+
+            // đúng giờ
             int perf_totalOnTime = monthAttendanceStats.GetValueOrDefault(AttendanceStatus.present, 0) +
                                    monthAttendanceStats.GetValueOrDefault(AttendanceStatus.completed, 0);
 
-            // Xử lý kết quả đào tạo
+            // 224
+
+            // Tính tổng số bản ghi (Tổng dung lượng tối đa hiện tại)
+            int totalAttendanceRecords = perf_totalLate + perf_totalAbsent + perf_totalOnTime;
+
+            // Tính tỷ lệ % (0 - 100). Lưu ý ép kiểu double để không bị mất phần thập phân khi chia
+            double OnTimeRate = 0;
+            if (totalAttendanceRecords > 0)
+            {
+                OnTimeRate = Math.Round(((double)perf_totalOnTime / totalAttendanceRecords) * 100, 2);
+            }
+
+            double LateTimeRate = 0;
+            if (totalAttendanceRecords > 0)
+            {
+                LateTimeRate = Math.Round(((double)perf_totalLate / totalAttendanceRecords) * 100, 2);
+            }
+
+            double AbsentRate = 0;
+            if (totalAttendanceRecords > 0)
+            {
+                AbsentRate = Math.Round(((double)perf_totalAbsent / totalAttendanceRecords) * 100, 2);
+            }
+
+            // --- XỬ LÝ KẾT QUẢ ĐÀO TẠO ---
             int perf_trainCompleted = allTrainingStats.GetValueOrDefault(TrainingStatus.completed, 0);
             int perf_trainFailed = allTrainingStats.GetValueOrDefault(TrainingStatus.failed, 0);
             int perf_trainInProgress = allTrainingStats.GetValueOrDefault(TrainingStatus.in_progress, 0) +
@@ -741,11 +867,15 @@ namespace DeTaiNhanSu.Controllers
             decimal perf_trainAvgScore = Math.Round(avgScore ?? 0, 2);
 
             // Build DTO
+            // Bạn cần cập nhật DTO để hứng thêm trường 'rate' hoặc 'score'
             var attendancePayload = new
             {
                 totalLate = perf_totalLate,
                 totalAbsent = perf_totalAbsent,
-                totalOnTime = perf_totalOnTime
+                totalOnTime = perf_totalOnTime,
+                OnTimeRate = OnTimeRate,
+                LateTimeRate = LateTimeRate,
+                AbsentRate = AbsentRate,// Giá trị từ 0 đến 100
             };
 
             var trainingPayload = new
@@ -756,6 +886,7 @@ namespace DeTaiNhanSu.Controllers
                 averageScore = perf_trainAvgScore
             };
 
+            // Lưu ý: Đảm bảo constructor của PerformanceStatsDto đã được cập nhật để nhận structure mới
             return new PerformanceStatsDto(attendancePayload, trainingPayload);
         }
 
@@ -861,6 +992,44 @@ namespace DeTaiNhanSu.Controllers
                     c.Status.ToString().ToLower()
                 ))
                 .ToListAsync(ct);
+        }
+
+        private async Task<List<NewContractDto>> GetNewContractsListAsync(IQueryable<Contract> newContractsQuery, CancellationToken ct)
+        {
+            // Lấy ngày hiện tại (00:00:00) để so sánh chính xác
+            var today = DateTime.Now.Date;
+
+            DateOnly dateOnlyValue = DateOnly.FromDateTime(today);
+
+            // Tái sử dụng IQueryable đã build
+            return await newContractsQuery
+                .Where(c => c.StartDate == dateOnlyValue) // QUAN TRỌNG: Lọc theo ngày bắt đầu là hôm nay
+                .OrderByDescending(c => c.StartDate)   // Mới nhất lên đầu (trong ngày)
+                .Take(10)                              // Lấy 10 bản ghi (nếu có quá nhiều hợp đồng trong 1 ngày)
+                .Select(c => new NewContractDto(
+                    c.Id,
+                    c.EmployeeId,
+                    c.Employee.FullName,
+                    c.ContractNumber,
+                    c.StartDate,
+                    c.Status.ToString().ToLower()
+                ))
+                .ToListAsync(ct);
+        }
+
+        private async Task<List<NoContractEmployeeDto>> GetNoContractEmployeesListAsync(IQueryable<Employee> employeeQuery, CancellationToken ct)
+        {
+            return await employeeQuery
+            .OrderBy(e => e.HireDate) // Ưu tiên xử lý người vào làm lâu nhất trước
+            .Take(10)
+            .Select(e => new NoContractEmployeeDto(
+                e.Id,
+                e.Code,
+                e.FullName,
+                e.HireDate,
+                e.Department != null ? e.Department.Name : "N/A"
+            ))
+            .ToListAsync(ct);
         }
     }
 }

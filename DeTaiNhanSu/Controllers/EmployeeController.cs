@@ -2420,12 +2420,39 @@ namespace DeTaiNhanSu.Controllers
                 if (req is null || string.IsNullOrWhiteSpace(req.FullName))
                     return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
 
-                // Sinh code tránh trùng
+                if (!string.IsNullOrEmpty(req.Cccd))
+                {
+                    var isCccdExist = await _db.Employees
+                        .IgnoreQueryFilters() // <--- Quét cả thùng rác
+                        .AnyAsync(x => x.Cccd == req.Cccd, ct);
+
+                    if (isCccdExist)
+                        return this.FAIL(StatusCodes.Status409Conflict, $"CCCD '{req.Cccd}' đã tồn tại trong hệ thống (có thể thuộc về nhân viên đã thôi việc/xóa).");
+                }
+
+                // Check Email cá nhân (nếu cần thiết phải unique)
+                if (!string.IsNullOrEmpty(req.Email))
+                {
+                    var isEmailExist = await _db.Employees
+                        .IgnoreQueryFilters() // <--- Quét cả thùng rác
+                        .AnyAsync(x => x.Email == req.Email, ct);
+
+                    if (isEmailExist)
+                        return this.FAIL(StatusCodes.Status409Conflict, $"Email '{req.Email}' đã được sử dụng.");
+                }
+
+                // ==========================================================================================
+                // 2. SINH MÃ NHÂN VIÊN TỰ ĐỘNG (Đảm bảo không trùng với người đã xóa)
+                // ==========================================================================================
                 string employeeCode;
                 do
                 {
                     employeeCode = "NV-" + Random.Shared.Next(100000, 999999);
-                } while (await _db.Employees.AnyAsync(x => x.Code == employeeCode, ct));
+
+                    // SỬA: Thêm .IgnoreQueryFilters()
+                    // Lý do: Nếu sinh ra mã NV-123 trùng với nhân viên đã xóa, 
+                    // vòng lặp sẽ biết để sinh lại mã khác, tránh lỗi Unique Constraint ở Database.
+                } while (await _db.Employees.IgnoreQueryFilters().AnyAsync(x => x.Code == employeeCode, ct));
 
                 string username = await GenerateUniqueUsernameAsync(req.FullName, ct);
                 const string companyDomain = "@huynhthanhson.io.vn";
@@ -3375,9 +3402,9 @@ namespace DeTaiNhanSu.Controllers
                 // Code (unique)
                 if (!string.IsNullOrWhiteSpace(req.Code))
                 {
-                    var dup = await _db.Employees.AnyAsync(x => x.Code == req.Code && x.Id != id, ct);
+                    var dup = await _db.Employees.IgnoreQueryFilters().AnyAsync(x => x.Code == req.Code && x.Id != id, ct);
                     if (dup)
-                        return this.FAIL(StatusCodes.Status409Conflict, $"Mã nhân viên '{req.Code}' đã tồn tại.");
+                        return this.FAIL(StatusCodes.Status409Conflict, $"Mã nhân viên '{req.Code}' đã tồn tại (có thể thuộc về hồ sơ đã xóa).");
                     e.Code = req.Code.Trim();
                 }
 
@@ -3386,9 +3413,9 @@ namespace DeTaiNhanSu.Controllers
                     e.FullName = req.FullName.Trim();
 
                 // Email (unique)
-                if (!string.IsNullOrWhiteSpace(req.Email))
+                if (!string.IsNullOrWhiteSpace(req.Email) && req.Email != e.Email)
                 {
-                    var dup = await _db.Employees.AnyAsync(x => x.Email == req.Email && x.Id != id, ct);
+                    var dup = await _db.Employees.IgnoreQueryFilters().AnyAsync(x => x.Email == req.Email && x.Id != id, ct);
                     if (dup)
                         return this.FAIL(StatusCodes.Status409Conflict, "Email đã tồn tại.");
                     e.Email = req.Email.Trim();
@@ -3397,7 +3424,7 @@ namespace DeTaiNhanSu.Controllers
                 // CCCD (unique)
                 if (!string.IsNullOrWhiteSpace(req.Cccd))
                 {
-                    var dup = await _db.Employees.AnyAsync(x => x.Cccd == req.Cccd && x.Id != id, ct);
+                    var dup = await _db.Employees.IgnoreQueryFilters().AnyAsync(x => x.Cccd == req.Cccd && x.Id != id, ct);
                     if (dup)
                         return this.FAIL(StatusCodes.Status409Conflict, "CCCD đã tồn tại.");
                     e.Cccd = req.Cccd.Trim();
@@ -3406,7 +3433,7 @@ namespace DeTaiNhanSu.Controllers
                 // Phone (unique)
                 if (!string.IsNullOrWhiteSpace(req.Phone))
                 {
-                    var dup = await _db.Employees.AnyAsync(x => x.Phone == req.Phone && x.Id != id, ct);
+                    var dup = await _db.Employees.IgnoreQueryFilters().AnyAsync(x => x.Phone == req.Phone && x.Id != id, ct);
                     if (dup)
                         return this.FAIL(StatusCodes.Status409Conflict, "Số điện thoại đã tồn tại.");
                     e.Phone = req.Phone.Trim();
@@ -3642,6 +3669,37 @@ namespace DeTaiNhanSu.Controllers
         }
 
 
+        //[HttpDelete("{id:guid}")]
+        //[HasPermission("Employees.Manage")]
+        //[Authorize(Roles = "HR, Admin")]
+        //public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
+        //{
+        //    try
+        //    {
+        //        var e = await _db.Employees.FirstOrDefaultAsync(x => x.Id == id, ct);
+        //        if (e is null)
+        //            return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy nhân viên.");
+
+        //        _db.Employees.Remove(e);
+        //        await _db.SaveChangesAsync(ct);
+
+        //        await _hubContext.Clients.Group("HR_Admins").SendAsync(
+        //            "EmployeeChanged",
+        //            new { action = "delete", data = new { id = id } },
+        //            ct);
+
+        //        return this.OK(message: "Xoá nhân viên thành công.");
+        //    }
+        //    catch (DbUpdateException)
+        //    {
+        //        return this.FAIL(StatusCodes.Status409Conflict, "Không thể xoá do đang được tham chiếu bởi dữ liệu khác.");
+        //    }
+        //    catch
+        //    {
+        //        return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi xoá nhân viên.");
+        //    }
+        //}
+
         [HttpDelete("{id:guid}")]
         [HasPermission("Employees.Manage")]
         [Authorize(Roles = "HR, Admin")]
@@ -3650,26 +3708,31 @@ namespace DeTaiNhanSu.Controllers
             try
             {
                 var e = await _db.Employees.FirstOrDefaultAsync(x => x.Id == id, ct);
+
                 if (e is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy nhân viên.");
 
-                _db.Employees.Remove(e);
+                // --- LOGIC XÓA MỀM ---
+                e.IsDeleted = true;
+                e.DeletedAt = DateTime.Now;
+
+                // (Tùy chọn) Cập nhật trạng thái nghiệp vụ nếu cần
+                // e.Status = EmployeeStatus.Quit; 
+
+                // Lưu thay đổi (Update thay vì Delete)
                 await _db.SaveChangesAsync(ct);
 
+                // Gửi thông báo realtime (Frontend vẫn xử lý như là xóa khỏi danh sách)
                 await _hubContext.Clients.Group("HR_Admins").SendAsync(
                     "EmployeeChanged",
                     new { action = "delete", data = new { id = id } },
                     ct);
 
-                return this.OK(message: "Xoá nhân viên thành công.");
+                return this.OK(message: "Xoá nhân viên thành công (Soft Delete).");
             }
-            catch (DbUpdateException)
+            catch (Exception ex)
             {
-                return this.FAIL(StatusCodes.Status409Conflict, "Không thể xoá do đang được tham chiếu bởi dữ liệu khác.");
-            }
-            catch
-            {
-                return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi xoá nhân viên.");
+                return this.FAIL(StatusCodes.Status500InternalServerError, $"Lỗi hệ thống: {ex.Message}");
             }
         }
 

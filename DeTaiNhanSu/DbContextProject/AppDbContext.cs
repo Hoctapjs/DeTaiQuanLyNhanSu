@@ -344,6 +344,8 @@ namespace DeTaiNhanSu.DbContextProject
                       .HasForeignKey(tr => tr.EvaluatedBy)
                       .OnDelete(DeleteBehavior.SetNull);
             });
+
+            modelBuilder.Entity<Employee>().HasQueryFilter(e => !e.IsDeleted);
         }
     }
 }
