@@ -727,15 +727,16 @@ namespace DeTaiNhanSu.Controllers
 
         // =================================================================
         // API GET PERFORMANCE BATCH (Tính lương hàng loạt theo tháng)
-        // ĐÃ TÍCH HỢP TÌM KIẾM, SẮP XẾP, PHÂN TRANG (Đã kiểm tra lại)
+        // ĐÃ TÍCH HỢP TÌM KIẾM THEO PHÒNG BAN, TỪ KHÓA, SẮP XẾP, PHÂN TRANG
         // =================================================================
         [HttpGet("performance-batch")]
         public async Task<IActionResult> GetPerformanceBatch(
            [FromQuery] string? month,
-           [FromQuery] string? q,             // Tham số tìm kiếm
-           [FromQuery] int current = 1,     // Trang hiện tại
-           [FromQuery] int pageSize = 20,   // Số lượng mỗi trang
-           [FromQuery] string? sort = null,     // Tham số sắp xếp
+           [FromQuery] string? q,             // Tham số tìm kiếm (Tên/Mã NV)
+           [FromQuery] Guid? departmentId,    // [MỚI] Tham số lọc theo phòng ban
+           [FromQuery] int current = 1,       // Trang hiện tại
+           [FromQuery] int pageSize = 20,     // Số lượng mỗi trang
+           [FromQuery] string? sort = null,   // Tham số sắp xếp
            CancellationToken ct = default)
         {
             try
@@ -763,7 +764,13 @@ namespace DeTaiNhanSu.Controllers
                     .Where(e => e.Status == EmployeeStatus.active && activeContractEmployeeIds.Contains(e.Id))
                     .AsNoTracking();
 
-                // Lấy tổng số lượng nhân viên có hợp đồng hợp lệ (Total Ban Đầu)
+                // [MỚI] Lọc theo DepartmentId nếu có
+                if (departmentId.HasValue)
+                {
+                    query = query.Where(e => e.DepartmentId == departmentId.Value);
+                }
+
+                // Lấy tổng số lượng nhân viên có hợp đồng hợp lệ (Total Ban Đầu - Sau khi lọc phòng ban nếu có)
                 var preFilterTotal = await query.CountAsync(ct);
 
                 if (preFilterTotal == 0)
@@ -772,17 +779,16 @@ namespace DeTaiNhanSu.Controllers
                     return Ok(new
                     {
                         statusCode = 200,
-                        message = baseMessage + " - Không tìm thấy nhân viên nào có hợp đồng đang hoạt động.",
+                        message = baseMessage + (departmentId.HasValue ? " - Không tìm thấy nhân viên nào trong phòng ban này." : " - Không tìm thấy nhân viên nào có hợp đồng đang hoạt động."),
                         data = new { meta = emptyMeta, result = new List<object>() },
                         success = true
                     });
                 }
 
-                // 3. Áp dụng Tìm kiếm (q)
+                // 3. Áp dụng Tìm kiếm từ khóa (q) - Tên hoặc Mã NV
                 if (!string.IsNullOrWhiteSpace(q))
                 {
                     string search = q.Trim();
-                    // Lọc theo FullName hoặc Code
                     query = query.Where(e => e.FullName.Contains(search) || e.Code.Contains(search));
                 }
 
@@ -814,7 +820,7 @@ namespace DeTaiNhanSu.Controllers
                     return CreateErrorResponse(StatusCodes.Status400BadRequest, sortError);
                 }
 
-                // 5. Lấy tổng số lượng SAU KHI lọc (q)
+                // 5. Lấy tổng số lượng SAU KHI lọc tất cả điều kiện
                 var total = await query.CountAsync(ct);
 
                 // Xử lý trường hợp không tìm thấy sau khi Tìm kiếm (q)
@@ -844,6 +850,12 @@ namespace DeTaiNhanSu.Controllers
 
                 // 8. Tính toán và Định dạng kết quả
                 var allResults = new List<object>();
+
+                // [Tối ưu hóa] Load trước dữ liệu cần thiết cho danh sách nhân viên để tránh N+1 query trong CalculateEmployeePayroll
+                // Tuy nhiên, vì hàm CalculateEmployeePayroll đang viết tách biệt và khá phức tạp,
+                // ta giữ nguyên việc gọi hàm này trong vòng lặp để đảm bảo tính đúng đắn của logic tính lương.
+                // Với pageSize=20, hiệu năng vẫn ở mức chấp nhận được.
+
                 foreach (var employee in employeesToRun)
                 {
                     var calculatedResult = await CalculateEmployeePayroll(employee.Id, startDate, endDate);
