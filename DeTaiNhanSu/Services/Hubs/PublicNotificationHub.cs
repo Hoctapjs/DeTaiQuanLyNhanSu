@@ -26,10 +26,10 @@ namespace DeTaiNhanSu.Services.Hubs
         }
 
         // ✅ Client sẽ gọi khi app mở/tắt → server lưu trạng thái thiết bị
-        public async Task UpdateDeviceStatus(string deviceId, bool isAppOpen)
+        // Client cần gọi: await hubConnection.InvokeAsync("UpdateDeviceStatus", userId, isAppOpen, fcmToken);
+        public async Task UpdateDeviceStatus(string deviceId, bool isAppOpen, string fcmToken)
         {
-            await _deviceStatusService.UpdateDeviceStatusAsync(deviceId, Context.ConnectionId, isAppOpen);
-            Console.WriteLine($"📲 Device {deviceId} is {(isAppOpen ? "OPEN" : "CLOSED")}");
+            await _deviceStatusService.UpdateDeviceStatusAsync(deviceId, Context.ConnectionId, isAppOpen, fcmToken);
         }
     }
 }

@@ -4,7 +4,7 @@ namespace DeTaiNhanSu.Services.Notification
 {
     public interface IDeviceStatusService
     {
-        Task UpdateDeviceStatusAsync(string deviceId, string connectionId, bool isAppOpen);
+        Task UpdateDeviceStatusAsync(string deviceId, string connectionId, bool isAppOpen, string fcmToken);
         Task<bool> IsDeviceAppOpenAsync(string deviceId);
         Task<List<string>> GetOpenDevicesAsync();
         Task<List<string>> GetClosedDevicesAsync();

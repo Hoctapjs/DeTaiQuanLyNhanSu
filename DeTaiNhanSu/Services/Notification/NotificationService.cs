@@ -130,43 +130,56 @@ namespace DeTaiNhanSu.Services.Notification
                 _context.UserNotifications.AddRange(userNotifications);
                 await _context.SaveChangesAsync();
 
-                // 4️⃣ Gửi realtime notifications (SignalR + Firebase)
-                var userIdsToNotify = userNotifications.Select(un => un.UserId).ToList();
-                
-                var openDevices = await _deviceStatusService.GetOpenDevicesAsync();
-                var closedDevices = await _deviceStatusService.GetClosedDevicesAsync();
+                // 4️⃣ LOGIC MỚI: Phân luồng gửi theo trạng thái từng thiết bị
+                var userIdsToNotifyStrings = userNotifications.Select(un => un.UserId.ToString()).ToList();
 
-                if (userIdsToNotify.Any())
+                // Lấy TẤT CẢ thiết bị của danh sách user cần gửi
+                // (Lưu ý: Cột DeviceId trong bảng DeviceStatuses đang chứa UserId)
+                var allUserDevices = await _context.DeviceStatuses
+                    .Where(d => userIdsToNotifyStrings.Contains(d.DeviceId))
+                    .ToListAsync();
+
+                // Tạo 2 danh sách chứa đích đến
+                var signalRConnectionIds = new List<string>();
+                var firebaseTokens = new List<string>();
+
+                // Duyệt qua từng thiết bị để phân loại
+                foreach (var device in allUserDevices)
                 {
-                    openDevices = openDevices.Where(id => userIdsToNotify.Contains(Guid.Parse(id))).ToList();
-                    closedDevices = closedDevices.Where(id => userIdsToNotify.Contains(Guid.Parse(id))).ToList();
-                }
-
-                Console.WriteLine($"📱 Devices - Open: {openDevices.Count}, Closed: {closedDevices.Count}");
-
-                // 5️⃣ Gửi SignalR cho thiết bị đang mở
-                if (openDevices.Any())
-                {
-                    Console.WriteLine("📡 Sending SignalR HR notification...");
-                    await _hubContext.Clients.All.SendAsync("ReceiveHRNotification", notificationData);
-                }
-
-                // 6️⃣ Gửi Firebase cho thiết bị đã đóng
-                if (closedDevices.Any())
-                {
-                    Console.WriteLine("🔥 Sending FCM HR notification...");
-                    var closedTokens = await _context.FcmTokens
-                        .Where(t => closedDevices.Contains(t.UserId) && !string.IsNullOrEmpty(t.Token))
-                        .Select(t => t.Token)
-                        .ToListAsync();
-
-                    if (closedTokens.Any())
+                    if (device.IsAppOpen && !string.IsNullOrEmpty(device.ConnectionId))
                     {
-                        await _firebaseService.SendNotificationAsync(notification, closedTokens);
+                        // ✅ Thiết bị đang MỞ -> Gửi SignalR
+                        signalRConnectionIds.Add(device.ConnectionId);
+                    }
+                    else if (!device.IsAppOpen && !string.IsNullOrEmpty(device.FcmToken))
+                    {
+                        // 💤 Thiết bị đang ĐÓNG -> Gửi Firebase
+                        firebaseTokens.Add(device.FcmToken);
                     }
                 }
 
-                Console.WriteLine($"✅ HR notification sent to {userNotifications.Count} users with active contracts!");
+                Console.WriteLine($"📊 Routing Summary:");
+                Console.WriteLine($"   - Online Devices (SignalR): {signalRConnectionIds.Count}");
+                Console.WriteLine($"   - Offline Devices (Firebase): {firebaseTokens.Count}");
+
+                // 5️⃣ Gửi SignalR cho các thiết bị đang mở (Gửi song song)
+                if (signalRConnectionIds.Any())
+                {
+                    Console.WriteLine("📡 Sending SignalR to open devices...");
+                    // Dùng Clients.Clients để gửi đến danh sách ConnectionId cụ thể
+                    await _hubContext.Clients.Clients(signalRConnectionIds).SendAsync("ReceiveHRNotification", notificationData);
+                }
+
+                // 6️⃣ Gửi Firebase cho các thiết bị đang đóng (Gửi song song)
+                if (firebaseTokens.Any())
+                {
+                    Console.WriteLine("🔥 Sending FCM to closed devices...");
+                    // FcmTokens có thể trùng lặp nếu 1 thiết bị đăng ký lại nhiều lần, nên Distinct() để tối ưu
+                    var uniqueTokens = firebaseTokens.Distinct().ToList();
+                    await _firebaseService.SendNotificationAsync(notification, uniqueTokens);
+                }
+
+                Console.WriteLine($"✅ Notification process completed!");
             }
             catch (Exception ex)
             {
@@ -223,7 +236,7 @@ namespace DeTaiNhanSu.Services.Notification
             await SendHRNotificationAsync(notification, targetUserIds);
         }
         // ==========================================================
-        // ✅ HÀM UPDATE HOÀN CHỈNH (KHÔNG RESET ReadAt, CÓ SYNC TargetUserIds)
+        // ✅ HÀM UPDATE HOÀN CHỈNH (LOGIC ROUTING GIỐNG SendHRNotificationAsync)
         // ==========================================================
         public async Task<bool> UpdateNotificationAsync(Guid notificationId, UpdateNotificationRequest request)
         {
@@ -232,7 +245,6 @@ namespace DeTaiNhanSu.Services.Notification
             {
                 // ===============================================
                 // TRƯỜNG HỢP 1: CÓ UserId -> "Tạo bản sao" (Clone)
-                // (Logic này đã hoàn chỉnh, giữ nguyên)
                 // ===============================================
                 if (request.TargetUserIds != null)
                 {
@@ -240,14 +252,16 @@ namespace DeTaiNhanSu.Services.Notification
                                       $"Hệ thống sẽ ƯU TIÊN UserId và BỎ QUA TargetUserIds.");
                 }
 
-                // (Logic "Tạo bản sao" - Xóa cũ, Thêm mới)
+                // Logic "Tạo bản sao" - Xóa cũ, Thêm mới
                 var oldUserNotificationLink = await _context.UserNotifications
                     .FirstOrDefaultAsync(un => un.NotificationId == notificationId && un.UserId == request.UserId.Value);
                 if (oldUserNotificationLink == null) return false;
+
                 var originalNotification = await _context.Notifications
                     .AsNoTracking()
                     .FirstOrDefaultAsync(n => n.Id == notificationId);
                 if (originalNotification == null) return false;
+
                 var newNotification = new Models.Notification
                 {
                     Id = Guid.NewGuid(),
@@ -270,18 +284,57 @@ namespace DeTaiNhanSu.Services.Notification
 
                 await _context.SaveChangesAsync();
 
-                // 7. Gửi thông báo (SignalR + Firebase)
+                // ✅ LOGIC ROUTING MỚI: Xử lý TẤT CẢ thiết bị của user (giống SendHRNotificationAsync)
                 string userIdString = request.UserId.Value.ToString();
-                var device = await _context.DeviceStatuses.FirstOrDefaultAsync(d => d.DeviceId == userIdString);
 
-                if (device != null && device.IsAppOpen && !string.IsNullOrEmpty(device.ConnectionId))
+                // Lấy TẤT CẢ thiết bị của user này
+                var userDevices = await _context.DeviceStatuses
+                    .Where(d => d.DeviceId == userIdString)
+                    .ToListAsync();
+
+                if (userDevices.Any())
                 {
-                    // 7a. Gửi SignalR (App đang mở)
-                    await _hubContext.Clients.Client(device.ConnectionId).SendAsync("ReceiveNotificationUpdate", newNotification);
+                    // Tạo 2 danh sách chứa đích đến
+                    var signalRConnectionIds = new List<string>();
+                    var firebaseTokens = new List<string>();
+
+                    // Duyệt qua từng thiết bị để phân loại
+                    foreach (var device in userDevices)
+                    {
+                        if (device.IsAppOpen && !string.IsNullOrEmpty(device.ConnectionId))
+                        {
+                            // ✅ Thiết bị đang MỞ -> Gửi SignalR
+                            signalRConnectionIds.Add(device.ConnectionId);
+                        }
+                        else if (!device.IsAppOpen && !string.IsNullOrEmpty(device.FcmToken))
+                        {
+                            // 💤 Thiết bị đang ĐÓNG -> Gửi Firebase
+                            firebaseTokens.Add(device.FcmToken);
+                        }
+                    }
+
+                    Console.WriteLine($"📊 Update Routing Summary for User {userIdString}:");
+                    Console.WriteLine($"   - Online Devices (SignalR): {signalRConnectionIds.Count}");
+                    Console.WriteLine($"   - Offline Devices (Firebase): {firebaseTokens.Count}");
+
+                    // Gửi SignalR cho các thiết bị đang mở
+                    if (signalRConnectionIds.Any())
+                    {
+                        Console.WriteLine("📡 Sending SignalR update to open devices...");
+                        await _hubContext.Clients.Clients(signalRConnectionIds).SendAsync("ReceiveNotificationUpdate", newNotification);
+                    }
+
+                    // Gửi Firebase cho các thiết bị đang đóng
+                    if (firebaseTokens.Any())
+                    {
+                        Console.WriteLine("🔥 Sending FCM update to closed devices...");
+                        var uniqueTokens = firebaseTokens.Distinct().ToList();
+                        await _firebaseService.SendNotificationAsync(newNotification, uniqueTokens);
+                    }
                 }
                 else
                 {
-                    // 7b. ✅ GỬI FIREBASE (App đang đóng hoặc không tìm thấy device status)
+                    // Fallback: Nếu không tìm thấy trong DeviceStatus, tìm trong FcmTokens
                     var fcmTokens = await _context.FcmTokens
                         .Where(t => t.UserId == userIdString && !string.IsNullOrEmpty(t.Token))
                         .Select(t => t.Token)
@@ -289,29 +342,28 @@ namespace DeTaiNhanSu.Services.Notification
 
                     if (fcmTokens.Any())
                     {
-                        Console.WriteLine($"🔥 Đang gửi FCM (Update User-Specific) đến: {userIdString}");
+                        Console.WriteLine($"🔥 Fallback: Sending FCM update to all tokens for user {userIdString}");
                         await _firebaseService.SendNotificationAsync(newNotification, fcmTokens);
                     }
                 }
+
                 return true;
             }
             else
             {
                 // ===============================================
                 // TRƯỜNG HỢP 2: KHÔNG CÓ UserId -> Update (Admin)
-                // (PHẦN ĐÃ HOÀN THIỆN)
                 // ===============================================
                 var notification = await _context.Notifications.FindAsync(notificationId);
                 if (notification == null) return false;
 
-                // (Logic cập nhật thông báo gốc)
+                // Cập nhật thông báo gốc
                 notification.Title = request.Title;
                 notification.Content = request.Content;
                 notification.Type = request.Type ?? notification.Type;
                 notification.ActorId = request.ActorId ?? notification.ActorId;
                 notification.ActionUrl = request.ActionUrl;
-
-                // (PHẦN RESET ReadAt ĐÃ BỊ XÓA THEO YÊU CẦU CỦA BẠN)
+                notification.CreatedAt = GetVietnamTime(); // ✅ THÊM DÒNG NÀY: Cập nhật thời gian tạo
 
                 // ===============================================
                 // ✅ LOGIC SYNC LIST (PHẦN HOÀN CHỈNH)
@@ -327,13 +379,11 @@ namespace DeTaiNhanSu.Services.Notification
                     var targetUserIdsSet = request.TargetUserIds.ToHashSet();
 
                     // 1. Tìm các liên kết để XÓA
-                    // (Những user có trong DB nhưng KHÔNG có trong danh sách mới)
                     var linksToRemove = currentLinks
                         .Where(l => !targetUserIdsSet.Contains(l.UserId))
                         .ToList();
 
                     // 2. Tìm các UserId để THÊM MỚI
-                    // (Những user có trong danh sách mới nhưng KHÔNG có trong DB)
                     var userIdsToAdd = targetUserIdsSet
                         .Where(id => !existingUserIds.Contains(id))
                         .ToList();
@@ -357,10 +407,14 @@ namespace DeTaiNhanSu.Services.Notification
                     }
                 }
 
-                // Lưu tất cả thay đổi (cả Notification và UserNotification)
+                // Lưu tất cả thay đổi
                 await _context.SaveChangesAsync();
 
-                // 4. Lấy TẤT CẢ user liên quan (logic gửi thông báo giữ nguyên)
+                // ===============================================
+                // ✅ LOGIC ROUTING MỚI: Xử lý TẤT CẢ user và thiết bị (giống SendHRNotificationAsync)
+                // ===============================================
+
+                // Lấy TẤT CẢ user liên quan sau khi sync
                 var allInvolvedUserIds = await _context.UserNotifications
                     .Where(un => un.NotificationId == notificationId)
                     .Select(un => un.UserId)
@@ -371,124 +425,88 @@ namespace DeTaiNhanSu.Services.Notification
 
                 var allInvolvedUserIdStrings = allInvolvedUserIds.Select(g => g.ToString()).ToList();
 
-                // 5. Gửi SignalR (App đang mở)
-                var openDevices = await _context.DeviceStatuses
-                    .Where(d => allInvolvedUserIdStrings.Contains(d.DeviceId) && d.IsAppOpen)
-                    .Select(d => d.ConnectionId)
+                // Lấy TẤT CẢ thiết bị của danh sách user cần gửi
+                var allUserDevices = await _context.DeviceStatuses
+                    .Where(d => allInvolvedUserIdStrings.Contains(d.DeviceId))
                     .ToListAsync();
 
-                if (openDevices.Any())
+                // Tạo 2 danh sách chứa đích đến
+                var signalRConnectionIds = new List<string>();
+                var firebaseTokens = new List<string>();
+
+                // Duyệt qua từng thiết bị để phân loại
+                foreach (var device in allUserDevices)
                 {
-                    await _hubContext.Clients.Clients(openDevices).SendAsync("ReceiveNotificationUpdate", notification);
+                    if (device.IsAppOpen && !string.IsNullOrEmpty(device.ConnectionId))
+                    {
+                        // ✅ Thiết bị đang MỞ -> Gửi SignalR
+                        signalRConnectionIds.Add(device.ConnectionId);
+                    }
+                    else if (!device.IsAppOpen && !string.IsNullOrEmpty(device.FcmToken))
+                    {
+                        // 💤 Thiết bị đang ĐÓNG -> Gửi Firebase
+                        firebaseTokens.Add(device.FcmToken);
+                    }
                 }
 
-                // 6. ✅ GỬI FIREBASE (App đang đóng)
-                var closedDeviceUserIds = await _context.DeviceStatuses
-                    .Where(d => allInvolvedUserIdStrings.Contains(d.DeviceId) && !d.IsAppOpen)
-                    .Select(d => d.DeviceId) // Lấy UserId (string)
-                    .ToListAsync();
+                Console.WriteLine($"📊 Update Admin Routing Summary:");
+                Console.WriteLine($"   - Total Users: {allInvolvedUserIds.Count}");
+                Console.WriteLine($"   - Online Devices (SignalR): {signalRConnectionIds.Count}");
+                Console.WriteLine($"   - Offline Devices (Firebase): {firebaseTokens.Count}");
 
-                if (closedDeviceUserIds.Any())
+                // Gửi SignalR cho các thiết bị đang mở (song song)
+                if (signalRConnectionIds.Any())
                 {
-                    var closedTokens = await _context.FcmTokens
-                        .Where(t => closedDeviceUserIds.Contains(t.UserId) && !string.IsNullOrEmpty(t.Token))
+                    Console.WriteLine("📡 Sending SignalR update to open devices...");
+                    await _hubContext.Clients.Clients(signalRConnectionIds).SendAsync("ReceiveNotificationUpdate", notification);
+                }
+
+                // Gửi Firebase cho các thiết bị đang đóng (song song)
+                if (firebaseTokens.Any())
+                {
+                    Console.WriteLine("🔥 Sending FCM update to closed devices...");
+                    var uniqueTokens = firebaseTokens.Distinct().ToList();
+                    await _firebaseService.SendNotificationAsync(notification, uniqueTokens);
+                }
+
+                // Fallback: Xử lý các user không có trong DeviceStatus (gửi tất cả FCM tokens)
+                var usersWithoutDeviceStatus = allInvolvedUserIdStrings
+                    .Where(userId => !allUserDevices.Any(d => d.DeviceId == userId))
+                    .ToList();
+
+                if (usersWithoutDeviceStatus.Any())
+                {
+                    var fallbackTokens = await _context.FcmTokens
+                        .Where(t => usersWithoutDeviceStatus.Contains(t.UserId) && !string.IsNullOrEmpty(t.Token))
                         .Select(t => t.Token)
                         .ToListAsync();
 
-                    if (closedTokens.Any())
+                    if (fallbackTokens.Any())
                     {
-                        Console.WriteLine($"🔥 Đang gửi FCM (Update Admin) đến {closedTokens.Count} thiết bị đang đóng...");
-                        await _firebaseService.SendNotificationAsync(notification, closedTokens);
+                        Console.WriteLine($"🔥 Fallback: Sending FCM to {fallbackTokens.Count} tokens for users without device status");
+                        await _firebaseService.SendNotificationAsync(notification, fallbackTokens);
                     }
                 }
+
                 return true;
             }
         }
 
         public async Task SendLeaveRequestNotificationAsync(string title, string content, Guid targetUserId)
         {
-            // 1. Tạo Notification (Lưu ý: KHÔNG gán UserId ở đây vì Model không có)
             var notification = new Models.Notification
             {
                 Id = Guid.NewGuid(),
+                Type = "new", // Hoặc "new" tùy bạn định nghĩa
                 Title = title,
                 Content = content,
-                Type = "new", // Loại thông báo
                 CreatedAt = GetVietnamTime(),
-                ActorId = null, // Có thể truyền ID người duyệt vào đây nếu muốn
+                ActorId = null,
                 ActionUrl = null
             };
 
-            // 2. Tạo liên kết trong bảng UserNotification (Đây mới là chỗ lưu người nhận)
-            var userNotification = new UserNotification
-            {
-                // Giả định UserNotification có Id tự sinh hoặc bạn new Guid()
-                NotificationId = notification.Id,
-                UserId = targetUserId,
-                ReadAt = null // Chưa đọc
-            };
-
-            // 3. Lưu vào Database (Lưu cả 2 bảng)
-            _context.Notifications.Add(notification);
-            _context.UserNotifications.Add(userNotification);
-
-            await _context.SaveChangesAsync();
-
-            // ================================================================
-            // 4. Gửi Realtime (SignalR + Firebase)
-            // ================================================================
-
-            // Tạo object dữ liệu để gửi đi (Mapping cho khớp với App Client)
-            var notificationPayload = new
-            {
-                id = notification.Id,
-                title = notification.Title,
-                content = notification.Content,
-                type = notification.Type,
-                createdAt = notification.CreatedAt,
-                isRead = false // Mặc định là chưa đọc
-            };
-
-            string targetUserIdString = targetUserId.ToString();
-
-            // A. Tìm thiết bị của user
-            var userDevices = await _context.DeviceStatuses
-                .Where(d => d.DeviceId == targetUserIdString)
-                .ToListAsync();
-
-            // B. Tách luồng Online (SignalR)
-            var onlineConnectionIds = userDevices
-                .Where(d => d.IsAppOpen && !string.IsNullOrEmpty(d.ConnectionId))
-                .Select(d => d.ConnectionId)
-                .ToList();
-
-            if (onlineConnectionIds.Any())
-            {
-                // Gửi SignalR
-                await _hubContext.Clients.Clients(onlineConnectionIds)
-                    .SendAsync("ReceiveNotification", notificationPayload);
-
-                Console.WriteLine($"✅ [SignalR] Sent to user {targetUserId}");
-            }
-
-            // C. Tách luồng Offline (Firebase)
-            // Logic: Nếu không có thiết bị nào online thì gửi Firebase
-            if (!onlineConnectionIds.Any())
-            {
-                var fcmTokens = await _context.FcmTokens
-                    .Where(t => t.UserId == targetUserIdString)
-                    .Select(t => t.Token)
-                    .ToListAsync();
-
-                if (fcmTokens.Any())
-                {
-                    // Gửi Firebase (Cần đảm bảo hàm SendNotificationAsync nhận đúng Model hoặc Payload)
-                    // Vì hàm SendNotificationAsync của bạn nhận Model Notification, ta truyền notification vào
-                    await _firebaseService.SendNotificationAsync(notification, fcmTokens);
-
-                    Console.WriteLine($"🔥 [Firebase] Sent to user {targetUserId}");
-                }
-            }
+            // ✅ GỌI LẠI HÀM GỐC: Đóng gói 1 user vào List để tái sử dụng logic phân luồng
+            await SendHRNotificationAsync(notification, new List<Guid> { targetUserId });
         }
 
     }

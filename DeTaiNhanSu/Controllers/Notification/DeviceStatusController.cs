@@ -81,13 +81,15 @@ namespace DeTaiNhanSu.Controllers.Notification
         {
             try
             {
+                // Truyền thêm request.FcmToken vào service
                 await _deviceStatusService.UpdateDeviceStatusAsync(
                     request.DeviceId,
                     request.ConnectionId ?? "manual",
-                    request.IsAppOpen
+                    request.IsAppOpen,
+                    request.FcmToken // Token từ client gửi lên
                 );
 
-                return Ok($"Device {request.DeviceId} status updated to {(request.IsAppOpen ? "Open" : "Closed")}");
+                return Ok($"Device status updated for User {request.DeviceId}");
             }
             catch (Exception ex)
             {
@@ -101,5 +103,6 @@ namespace DeTaiNhanSu.Controllers.Notification
         public string DeviceId { get; set; } = string.Empty;
         public string? ConnectionId { get; set; }
         public bool IsAppOpen { get; set; }
+        public string FcmToken { get; set; } = string.Empty; // Thêm trường này
     }
 }
