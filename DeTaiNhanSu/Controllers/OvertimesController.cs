@@ -26,7 +26,6 @@ namespace DeTaiNhanSu.Controllers
 
         // ========= GET: /api/overtimes?employeeId=&from=&to=&minHours=&maxHours=&current=&pageSize=&sort=
         [HttpGet]
-        [Authorize(Roles = "HR, Manager")]
         public async Task<IActionResult> Search(
             [FromQuery] Guid? employeeId,
             [FromQuery] DateOnly? from,

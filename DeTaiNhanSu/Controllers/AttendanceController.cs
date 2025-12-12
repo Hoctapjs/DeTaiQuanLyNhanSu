@@ -207,82 +207,133 @@ namespace DeTaiNhanSu.Controllers
             await _context.SaveChangesAsync(ct);
             return Ok(new { statusCode = 200, Success = true, Message = $"Check-in thành công. Trạng thái: {status}" });
         }
-
-        // ------------------- CHECK-OUT -------------------
+        // [POST] api/Attendance/checkout
         [HttpPost("checkout")]
         public async Task<IActionResult> Checkout([FromBody] CheckoutRequest request, CancellationToken ct = default)
         {
             if (!Guid.TryParse(request.EmployeeId, out var empId)) return CreateErrorResponse(400, "EmployeeId không hợp lệ.");
-            var (today, vnNowTime) = GetVnTime();
+            var (today, vnNowTime) = GetVnTime(); // Lấy ngày và giờ hiện tại (TimeOnly)
 
-            // 1. LẤY CẤU HÌNH & CA LÀM VIỆC
+            // 1. LẤY CẤU HÌNH & CA LÀM VIỆC & THÔNG TIN CHẤM CÔNG
             var config = await GetAttendanceConfig(ct);
             var shift = await GetEmployeeShiftForToday(empId, today, ct);
-
             var attendance = await _context.Attendances.FirstOrDefaultAsync(a => a.EmployeeId == empId && a.Date == today, ct);
 
             if (attendance == null || attendance.CheckIn == null) return CreateErrorResponse(400, "Bạn chưa check-in hôm nay!");
             if (attendance.CheckOut != null) return CreateErrorResponse(400, "Bạn đã check-out rồi!");
             if (shift == null) return CreateErrorResponse(500, "Lỗi: Không tìm thấy ca làm việc.");
 
-            // 2. CHECK WIFI (Giữ nguyên)
+            // 2. CHECK WIFI (Giữ nguyên logic bảo mật)
             var allowedWifis = await GetAllowedWifisFromDb();
-            if (!allowedWifis.Any()) return CreateErrorResponse(500, "Lỗi cấu hình: Danh sách WiFi công ty chưa được thiết lập.");
+            if (!allowedWifis.Any(w => string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase)))
+                return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty.");
 
-            var isAllowed = allowedWifis.Any(w => string.Equals(w.WifiName, request.WifiName, StringComparison.OrdinalIgnoreCase) && string.Equals(w.Bssid, request.Bssid, StringComparison.OrdinalIgnoreCase));
-            if (!isAllowed) return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty. Vui lòng kết nối để checkout");
+            // ==========================================================================================
+            // 3. [UPDATE] XÁC ĐỊNH GIỜ VỀ KỲ VỌNG (EXPECTED END TIME) CÓ TÍNH OT
+            // ==========================================================================================
 
-            // 3. XỬ LÝ VỀ SỚM / OT (Dựa trên Shift EndTime & Config)
-            TimeOnly shiftEndTime = shift.EndTime;
+            // a. Lấy thông tin OT đã được duyệt của ngày hôm nay
+            var approvedOt = await _context.Overtimes
+                .AsNoTracking()
+                .FirstOrDefaultAsync(o => o.EmployeeId == empId && o.Date == today, ct);
+
+            // b. Chuyển đổi sang DateTime để tính toán cộng trừ giờ an toàn (tránh lỗi qua đêm 23h -> 01h)
+            DateTime nowDateTime = today.ToDateTime(vnNowTime);
+            DateTime shiftEndDateTime = today.ToDateTime(shift.EndTime);
+
+            // Nếu ca làm việc qua đêm (End < Start), cộng thêm 1 ngày vào EndTime
+            if (shift.EndTime < shift.StartTime)
+            {
+                shiftEndDateTime = shiftEndDateTime.AddDays(1);
+                // Nếu giờ hiện tại nhỏ (ví dụ 01:00 sáng), và ca bắt đầu hôm qua, thì now cũng phải là ngày hôm sau
+                if (vnNowTime < shift.StartTime) nowDateTime = nowDateTime.AddDays(1);
+            }
+
+            // c. Tính giờ về kỳ vọng (Nếu có OT thì cộng thêm giờ OT vào giờ kết thúc ca)
+            DateTime expectedEndDateTime = shiftEndDateTime;
+            double approvedOtHours = 0;
+
+            if (approvedOt != null)
+            {
+                approvedOtHours = (double)approvedOt.Hours;
+                expectedEndDateTime = shiftEndDateTime.AddHours(approvedOtHours); // Ví dụ: 17:00 + 3h = 20:00
+            }
+
+            // ==========================================================================================
+            // 4. [UPDATE] SO SÁNH GIỜ VỀ THỰC TẾ VS KỲ VỌNG
+            // ==========================================================================================
             string checkoutNote = "";
 
-            // Ngưỡng cho phép về sớm (Ví dụ: EndTime - 5 phút)
-            var earlyLeaveAllowedTime = shiftEndTime.Add(TimeSpan.FromMinutes(-config.EarlyLeaveToleranceMinutes));
+            // Ngưỡng cho phép về sớm (Ví dụ: Được về trước 5p)
+            DateTime earlyThreshold = expectedEndDateTime.AddMinutes(-config.EarlyLeaveToleranceMinutes);
 
-            // Ngưỡng tính OT (Ví dụ: EndTime + 5 phút)
-            var otThresholdTime = shiftEndTime.Add(TimeSpan.FromMinutes(config.EarlyLeaveToleranceMinutes));
+            // Ngưỡng tính OT phát sinh thêm (Ngoài OT đã duyệt)
+            DateTime otThreshold = expectedEndDateTime.AddMinutes(config.EarlyLeaveToleranceMinutes);
 
-            if (vnNowTime < earlyLeaveAllowedTime)
+            // --- LOGIC ĐÁNH GIÁ ---
+            if (nowDateTime < earlyThreshold)
             {
-                // VỀ SỚM
-                var earlyDuration = shiftEndTime - vnNowTime;
-                var minutesEarly = Math.Round(earlyDuration.TotalMinutes);
+                // TRƯỜNG HỢP VỀ SỚM
+                var earlyMinutes = Math.Round((expectedEndDateTime - nowDateTime).TotalMinutes);
 
-                if (earlyDuration.TotalMinutes > config.SevereEarlyLeaveMinutes)
-                    checkoutNote += $" | Về sớm {minutesEarly} phút [PHẠT NẶNG]";
+                if (approvedOt != null)
+                {
+                    // Có đăng ký OT nhưng về trước giờ cam kết
+                    // Ví dụ: Đăng ký làm đến 20:00, nhưng 19:00 về -> Về sớm 60p so với cam kết
+                    checkoutNote += $" | Về sớm {earlyMinutes}p so với cam kết OT ({approvedOt.Hours}h)";
+
+                    // (Tùy chọn) Bạn có thể đánh dấu trạng thái đặc biệt ở đây nếu muốn
+                }
                 else
-                    checkoutNote += $" | Về sớm {minutesEarly} phút";
+                {
+                    // Không có OT, về sớm so với ca chính
+                    if (earlyMinutes > config.SevereEarlyLeaveMinutes)
+                        checkoutNote += $" | Về sớm {earlyMinutes} phút [PHẠT]";
+                    else
+                        checkoutNote += $" | Về sớm {earlyMinutes} phút";
+                }
             }
-            else if (vnNowTime > otThresholdTime)
+            else if (nowDateTime > otThreshold)
             {
-                // TĂNG CA (OT)
-                var otDuration = vnNowTime - shiftEndTime;
-                var minutesOT = Math.Round(otDuration.TotalMinutes);
-                checkoutNote += $" | Về trễ {minutesOT} phút";
+                // TRƯỜNG HỢP VỀ TRỄ / LÀM THÊM (Vượt quá cả giờ OT đã duyệt)
+                var extraMinutes = Math.Round((nowDateTime - expectedEndDateTime).TotalMinutes);
+
+                if (approvedOt != null)
+                    checkoutNote += $" | Hoàn thành OT {approvedOt.Hours}h & Làm thêm {extraMinutes}p";
+                else
+                    checkoutNote += $" | Về trễ {extraMinutes} phút";
+            }
+            else
+            {
+                // VỀ ĐÚNG GIỜ (Trong khoảng dung sai)
+                if (approvedOt != null)
+                    checkoutNote += $" | Hoàn thành OT {approvedOt.Hours}h";
+                else
+                    checkoutNote += " | Đúng giờ";
             }
 
-            // 4. CẬP NHẬT
+            // 5. LƯU VÀO DATABASE
             attendance.CheckOut = vnNowTime;
+
+            // Cập nhật trạng thái (Logic Status giữ nguyên hoặc tùy chỉnh)
             if (attendance.Status == AttendanceStatus.present)
             {
                 attendance.Status = AttendanceStatus.completed;
             }
-            else if (attendance.Status == AttendanceStatus.leave)
-            {
-                attendance.Status = AttendanceStatus.leave;
-            }
-            else if (attendance.Status == AttendanceStatus.late)
-            {
-                attendance.Status = AttendanceStatus.late;
-            }
-            else
-            {
-                attendance.Status = AttendanceStatus.absent;
-            }    
+            // Note: Nếu sáng đi trễ (Status=late), chiều về đúng giờ thì vẫn giữ status là late
+
             attendance.Note = (attendance.Note ?? "") + checkoutNote;
 
             await _context.SaveChangesAsync(ct);
-            return Ok(new { statusCode = 200, Success = true, Message = "Check-out thành công!" });
+
+            return Ok(new
+            {
+                statusCode = 200,
+                Success = true,
+                Message = "Check-out thành công!",
+                CheckOutTime = vnNowTime.ToString("HH:mm"),
+                Note = checkoutNote
+            });
         }
 
 
