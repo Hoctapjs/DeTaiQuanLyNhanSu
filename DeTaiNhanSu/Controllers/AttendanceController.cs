@@ -675,17 +675,27 @@ namespace DeTaiNhanSu.Controllers
             // 1. Lọc theo chuỗi tìm kiếm 'q'
             if (!string.IsNullOrEmpty(q))
             {
+                string searchTrimmed = q.Trim();
+
+                // Kiểm tra xem q có phải là một Guid hợp lệ không (để tìm theo EmployeeId)
+                bool isGuid = Guid.TryParse(searchTrimmed, out Guid searchGuid);
+
                 query = query.Where(a =>
-                    (a.Employee != null && a.Employee.FullName.Contains(q)) ||
-                    (a.Employee != null && a.Employee.Code.Contains(q)) ||
-                    (a.Note != null && a.Note.Contains(q)) ||
-                    a.Status.ToString().Contains(q)
+                    // Tìm chính xác theo EmployeeId nếu q là Guid
+                    (isGuid && a.EmployeeId == searchGuid) ||
+
+                    // Các điều kiện tìm kiếm text cũ
+                    (a.Employee != null && a.Employee.FullName.Contains(searchTrimmed)) ||
+                    (a.Employee != null && a.Employee.Code.Contains(searchTrimmed)) ||
+                    (a.Note != null && a.Note.Contains(searchTrimmed)) ||
+                    a.Status.ToString().Contains(searchTrimmed)
                 );
 
                 if (await initialQuery.AnyAsync() && !await query.AnyAsync())
                 {
-                    string supportedSearchFields = "Tên NV, Mã NV, Trạng thái (status), hoặc Ghi chú (note).";
-                    return CreateErrorResponse(400, $"Không tìm thấy kết quả nào cho '{q}'. Vui lòng tìm kiếm theo: {supportedSearchFields}");
+                    // Cập nhật thông báo lỗi để người dùng biết có thể tìm theo ID
+                    string supportedSearchFields = "EmployeeId (GUID), Tên NV, Mã NV, Trạng thái (status), hoặc Ghi chú (note).";
+                    return CreateErrorResponse(400, $"Không tìm thấy kết quả nào cho '{searchTrimmed}'. Vui lòng tìm kiếm theo: {supportedSearchFields}");
                 }
             }
 
