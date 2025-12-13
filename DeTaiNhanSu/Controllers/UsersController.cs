@@ -112,7 +112,6 @@ namespace DeTaiNhanSu.Controllers
 
         [HttpGet("Search")]
         [Authorize(Roles = "HR, Admin")]
-        [HasPermission("Users.View")]
         public async Task<IActionResult> Search(
     [FromQuery] string? q,
     [FromQuery] string? role,
@@ -189,7 +188,6 @@ namespace DeTaiNhanSu.Controllers
         // GET /api/users/GetById?id={guid}
         [HttpGet("GetById")]
         [Authorize(Roles = "HR, Admin")]
-        [HasPermission("Users.View")]
         public async Task<IActionResult> GetById([FromQuery] Guid id, CancellationToken ct)
         {
             try

@@ -33,7 +33,7 @@ namespace DeTaiNhanSu.Controllers
         // ✅ API MỚI: LẤY DANH SÁCH TỪ BẢNG NOTIFICATIONS (BẢNG GỐC)
         // =================================================================
         [HttpGet] // Đặt một tên route mới
-        [Authorize(Roles = "Admin")] // (Đề xuất: Chỉ Admin nên xem bảng gốc này)
+        [Authorize(Roles = "Admin, HR")] // (Đề xuất: Chỉ Admin nên xem bảng gốc này)
         public async Task<IActionResult> GetRootNotifications(
             [FromQuery] string? q,
             [FromQuery] int current = 1,
@@ -338,7 +338,7 @@ namespace DeTaiNhanSu.Controllers
         // (Giờ hàm này sẽ không báo lỗi `_notificationService` nữa)
         // ==========================================================
         [HttpPut("{id}")]
-        [Authorize(Roles = "Admin")]
+        [Authorize(Roles = "Admin, HR")]
         public async Task<IActionResult> UpdateNotification(Guid id, [FromBody] UpdateNotificationRequest request)
         {
             try
@@ -377,6 +377,7 @@ namespace DeTaiNhanSu.Controllers
        
         // Endpoint để tạo thông báo HR tùy chỉnh
         [HttpPost("create-hr")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> CreateHRNotification([FromBody] CreateNotificationRequest request)
         {
             try
@@ -493,6 +494,7 @@ namespace DeTaiNhanSu.Controllers
 
         // Endpoint đơn giản để tạo thông báo lương
         [HttpPost("create-payroll")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> CreatePayrollNotification([FromBody] SimpleNotificationRequest request)
         {
             try
@@ -521,6 +523,7 @@ namespace DeTaiNhanSu.Controllers
 
         // Endpoint để tạo thông báo chấm công
         [HttpPost("create-attendance")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> CreateAttendanceNotification([FromBody] SimpleNotificationRequest request)
         {
             try
@@ -549,6 +552,7 @@ namespace DeTaiNhanSu.Controllers
 
         // Endpoint để tạo thông báo nghỉ phép
         [HttpPost("create-leave-request")]
+        [Authorize(Roles = "HR")]
         public async Task<IActionResult> CreateLeaveRequestNotification([FromBody] SimpleNotificationRequest request)
         {
             try

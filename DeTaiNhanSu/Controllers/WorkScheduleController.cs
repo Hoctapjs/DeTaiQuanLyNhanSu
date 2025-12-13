@@ -213,6 +213,30 @@ namespace DeTaiNhanSu.Controllers
                 if (dup)
                     return this.FAIL(StatusCodes.Status409Conflict, $"Nhân viên đã có lịch làm việc ngày {req.Date}.");
 
+                //// start nhiều ca trong 1 ngày:
+
+                //// Lấy giờ bắt đầu/kết thúc của ca đang định thêm
+                //var newShift = await _db.ShiftTemplates.AsNoTracking()
+                //    .FirstOrDefaultAsync(s => s.Id == req.ShiftTemplateId, ct);
+
+                //// Lấy danh sách các ca ĐÃ CÓ của nhân viên trong ngày đó
+                //var existingSchedules = await _db.WorkSchedules
+                //    .Include(w => w.ShiftTemplate) // Join bảng để lấy giờ
+                //    .Where(w => w.EmployeeId == req.EmployeeId && w.Date == req.Date)
+                //    .ToListAsync(ct);
+
+                //// Check overlap (Giao nhau về thời gian)
+                //foreach (var item in existingSchedules)
+                //{
+                //    // Logic: (StartA < EndB) && (StartB < EndA) là trùng nhau
+                //    if (newShift.StartTime < item.ShiftTemplate.EndTime &&
+                //        item.ShiftTemplate.StartTime < newShift.EndTime)
+                //    {
+                //        return this.FAIL(StatusCodes.Status409Conflict,
+                //            $"Bị trùng giờ với ca {item.ShiftTemplate.Name} ({item.ShiftTemplate.StartTime}-{item.ShiftTemplate.EndTime}) đã có.");
+                //    }
+                //}
+
                 var entity = new WorkSchedule
                 {
                     Id = Guid.NewGuid(),
@@ -420,7 +444,7 @@ namespace DeTaiNhanSu.Controllers
                     }
                 }
 
-                if(!newSchedules.Any() && !schedulesToDelete.Any())
+                if (!newSchedules.Any() && !schedulesToDelete.Any())
                 {
                     // Trường hợp: Chọn ngày 20/11 (Thứ 5) nhưng DaysOfWeek chỉ chọn [Thứ 2, Thứ 3]
                     // -> Không có ngày nào khớp.
@@ -462,6 +486,170 @@ namespace DeTaiNhanSu.Controllers
                 return this.FAIL(StatusCodes.Status500InternalServerError, $"Lỗi xếp lịch hàng loạt: {ex.Message}");
             }
         }
+
+        //[HttpPost("bulk")]
+        //[Authorize(Roles = "HR, Admin, Manager")]
+        //public async Task<IActionResult> BulkCreate([FromBody] BulkCreateWorkScheduleRequest req, CancellationToken ct)
+        //{
+        //    try
+        //    {
+        //        // 1. VALIDATE & CHUẨN BỊ
+        //        if (req.FromDate > req.ToDate)
+        //            return this.FAIL(StatusCodes.Status400BadRequest, "Ngày bắt đầu phải <= Ngày kết thúc.");
+
+        //        var targetEmployeeIds = new List<Guid>();
+        //        if (req.EmployeeIds != null && req.EmployeeIds.Any())
+        //        {
+        //            targetEmployeeIds = req.EmployeeIds.Distinct().ToList();
+        //        }
+        //        else if (req.DepartmentId.HasValue)
+        //        {
+        //            targetEmployeeIds = await _db.Employees
+        //                .AsNoTracking()
+        //                .Where(e => e.DepartmentId == req.DepartmentId.Value && e.Status == EmployeeStatus.active)
+        //                .Select(e => e.Id)
+        //                .ToListAsync(ct);
+        //        }
+        //        else
+        //        {
+        //            return this.FAIL(StatusCodes.Status400BadRequest, "Phải chọn Nhân viên hoặc Phòng ban.");
+        //        }
+
+        //        if (!targetEmployeeIds.Any())
+        //            return this.FAIL(StatusCodes.Status404NotFound, "Không tìm thấy nhân viên nào để xếp lịch.");
+
+        //        var reqShift = await _db.ShiftTemplates
+        //            .AsNoTracking()
+        //            .FirstOrDefaultAsync(s => s.Id == req.ShiftTemplateId, ct);
+
+        //        if (reqShift == null)
+        //            return this.FAIL(StatusCodes.Status404NotFound, "Mẫu ca làm việc không tồn tại.");
+
+        //        // =================================================================================
+        //        // [FIX LỖI CS0019]: Convert DateOnly sang DateTime để so sánh với Database
+        //        // =================================================================================
+        //        var fromDateDt = req.FromDate;
+        //        var toDateDt = req.ToDate;
+
+        //        // 2. LẤY DỮ LIỆU CŨ (Sử dụng biến DateTime vừa convert)
+        //        var existingSchedules = await _db.WorkSchedules
+        //            .Include(w => w.ShiftTemplate)
+        //            .Where(w => targetEmployeeIds.Contains(w.EmployeeId)
+        //                        && w.Date >= fromDateDt  // Đã sửa: so sánh DateTime với DateTime
+        //                        && w.Date <= toDateDt)   // Đã sửa: so sánh DateTime với DateTime
+        //            .ToListAsync(ct);
+
+        //        var newSchedules = new List<WorkSchedule>();
+        //        var schedulesToDelete = new List<WorkSchedule>();
+
+        //        // 3. VÒNG LẶP (req.FromDate vẫn là DateOnly, biến 'date' là DateOnly)
+        //        for (var date = req.FromDate; date <= req.ToDate; date = date.AddDays(1))
+        //        {
+        //            if (req.DaysOfWeek != null && req.DaysOfWeek.Any() && !req.DaysOfWeek.Contains(date.DayOfWeek))
+        //                continue;
+
+        //            // [FIX LỖI CS1503]: Tạo biến DateTime cho ngày hiện tại để so sánh trong LINQ
+        //            var currentLoopDateDt = date;
+
+        //            foreach (var empId in targetEmployeeIds)
+        //            {
+        //                // Lấy các ca cũ trong ngày (So sánh DateTime)
+        //                var dailyExisting = existingSchedules
+        //                    .Where(x => x.EmployeeId == empId && x.Date == currentLoopDateDt)
+        //                    .ToList();
+
+        //                if (req.Overwrite)
+        //                {
+        //                    // Mode Ghi đè
+        //                    foreach (var oldItem in dailyExisting)
+        //                    {
+        //                        if (!schedulesToDelete.Contains(oldItem))
+        //                            schedulesToDelete.Add(oldItem);
+        //                    }
+        //                    // Thêm mới
+        //                    newSchedules.Add(CreateNewScheduleEntity(empId, date, req));
+        //                }
+        //                else
+        //                {
+        //                    // Mode Bổ sung (Check trùng giờ)
+        //                    bool isOverlap = false;
+        //                    foreach (var existItem in dailyExisting)
+        //                    {
+        //                        if (reqShift.StartTime < existItem.ShiftTemplate.EndTime &&
+        //                            existItem.ShiftTemplate.StartTime < reqShift.EndTime)
+        //                        {
+        //                            isOverlap = true;
+        //                            break;
+        //                        }
+        //                    }
+
+        //                    if (!isOverlap)
+        //                    {
+        //                        newSchedules.Add(CreateNewScheduleEntity(empId, date, req));
+        //                    }
+        //                }
+        //            }
+        //        }
+
+        //        if (!newSchedules.Any() && !schedulesToDelete.Any())
+        //        {
+        //            return StatusCode(StatusCodes.Status200OK, new
+        //            {
+        //                success = true,
+        //                message = "Không có thay đổi nào được thực hiện."
+        //            });
+        //        }
+
+        //        // 4. LƯU DATABASE
+        //        using var transaction = await _db.Database.BeginTransactionAsync(ct);
+        //        try
+        //        {
+        //            if (schedulesToDelete.Any())
+        //                _db.WorkSchedules.RemoveRange(schedulesToDelete);
+
+        //            if (newSchedules.Any())
+        //                await _db.WorkSchedules.AddRangeAsync(newSchedules, ct);
+
+        //            await _db.SaveChangesAsync(ct);
+        //            await transaction.CommitAsync(ct);
+        //        }
+        //        catch
+        //        {
+        //            await transaction.RollbackAsync(ct);
+        //            throw;
+        //        }
+
+        //        return StatusCode(StatusCodes.Status201Created, new
+        //        {
+        //            statusCode = 201,
+        //            message = $"Hoàn tất. Thêm mới: {newSchedules.Count}, Ghi đè: {schedulesToDelete.Count}.",
+        //            success = true
+        //        });
+        //    }
+        //    catch (Exception ex)
+        //    {
+        //        return this.FAIL(StatusCodes.Status500InternalServerError, $"Lỗi: {ex.Message}");
+        //    }
+        //}
+
+        //// ============================================================
+        //// [FIX LỖI CS0029 & CS1503]: Sửa Helper Function
+        //// ============================================================
+        //private WorkSchedule CreateNewScheduleEntity(Guid empId, DateOnly date, BulkCreateWorkScheduleRequest req)
+        //{
+        //    // date truyền vào là DateOnly
+        //    return new WorkSchedule
+        //    {
+        //        Id = Guid.NewGuid(),
+        //        EmployeeId = empId,
+
+        //        // Convert DateOnly -> DateTime trước khi gán vào Entity
+        //        Date = date,
+
+        //        ShiftTemplateId = req.ShiftTemplateId,
+        //        Note = req.Note
+        //    };
+        //}
 
         [HttpDelete("bulk")]
         [Authorize(Roles = "HR, Admin, Manager")]
