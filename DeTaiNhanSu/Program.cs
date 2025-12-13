@@ -1,30 +1,34 @@
 ﻿using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos;
+using DeTaiNhanSu.Hubs;
 using DeTaiNhanSu.Infrastructure.Auditing;
 using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services;
 using DeTaiNhanSu.Services.Auth;
 using DeTaiNhanSu.Services.ContractMaintenance;
 using DeTaiNhanSu.Services.Email;
 using DeTaiNhanSu.Services.Hubs; // Add this using statement for SignalR Hub
 using DeTaiNhanSu.Services.Log;
 using DeTaiNhanSu.Services.Notification; // Add this using statement
+using DeTaiNhanSu.Services.Scope;
 using FirebaseAdmin;
 using Google.Apis.Auth.OAuth2;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
+using QuestPDF.Infrastructure;
 using System.Text;
 using System.Text.Json;
-using DeTaiNhanSu.Hubs;
-
 // đặt alias nếu muốn, hoặc bỏ alias và dùng trực tiếp AuditActionFilter
 using AuditActionFilter = DeTaiNhanSu.Services.Log.AuditActionFilter;
-using Microsoft.Extensions.Options;
-using QuestPDF.Infrastructure;
-using DeTaiNhanSu.Services.Scope;
+
+// [MỚI 1] Thêm namespace Hangfire và Services
+using Hangfire;
+using DeTaiNhanSu.Services;
 
 QuestPDF.Settings.License = LicenseType.Community;
 
@@ -55,6 +59,22 @@ builder.Services.AddDbContext<AppDbContext>((sp, opt) =>
     opt.UseSqlServer(builder.Configuration.GetConnectionString("Default"));
     opt.AddInterceptors(sp.GetRequiredService<AuditSaveChangesInterceptor>());
 });
+
+// ==============================================================================
+// [MỚI 2] CẤU HÌNH HANGFIRE & ATTENDANCE SERVICE (Chèn ngay sau DbContext)
+// ==============================================================================
+// 1. Cấu hình Hangfire sử dụng SQL Server (chung chuỗi kết nối với App)
+builder.Services.AddHangfire(configuration => configuration
+    .SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
+    .UseSimpleAssemblyNameTypeSerializer()
+    .UseRecommendedSerializerSettings()
+    .UseSqlServerStorage(builder.Configuration.GetConnectionString("Default")));
+
+// 2. Thêm Hangfire Server (Con robot chạy ngầm)
+builder.Services.AddHangfireServer();
+
+// 3. Đăng ký Service Logic Chấm công
+builder.Services.AddScoped<IAttendanceService, AttendanceService>();
 
 // ==== Email ====
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection("Smtp"));
@@ -246,6 +266,9 @@ app.UseCors("DevCors");
 app.UseAuthentication();
 app.UseAuthorization();
 
+// [MỚI 3] KÍCH HOẠT DASHBOARD (Để bạn theo dõi Job)
+app.UseHangfireDashboard("/hangfire");
+
 app.UseSwagger();
 app.UseSwaggerUI();
 app.MapOpenApi();
@@ -258,4 +281,50 @@ app.MapControllers();
 
 app.MapHub<NotificationNewHub>("/notificationHubTable");
 app.MapHub<PublicNotificationHub>("/notificationHub");
+
+// ==============================================================================
+// [MỚI 4] LOGIC TỰ ĐỘNG ĐỌC GIỜ TỪ DB VÀ ĐẶT LỊCH KHI KHỞI ĐỘNG (Trước app.Run)
+// ==============================================================================
+using (var scope = app.Services.CreateScope())
+{
+    var services = scope.ServiceProvider;
+    var dbContext = services.GetRequiredService<AppDbContext>();
+    var recurringJobManager = services.GetRequiredService<IRecurringJobManager>();
+
+    try
+    {
+        // 1. Job Đánh vắng (Mặc định 11:00)
+        var absentSetting = dbContext.GlobalSettings.FirstOrDefault(s => s.Key == "ABSENT_MARK_THRESHOLD_TIME")?.Value ?? "11:00";
+        if (TimeOnly.TryParse(absentSetting, out var absentTime))
+        {
+            string absentCron = $"{absentTime.Minute} {absentTime.Hour} * * *";
+            recurringJobManager.AddOrUpdate<IAttendanceService>(
+                "job-mark-absent", // ID Job
+                service => service.MarkAbsentLogicAsync(),
+                absentCron,
+                new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time") }
+            );
+            Console.WriteLine($"[Hangfire] Đã đặt lịch MarkAbsent lúc: {absentTime}");
+        }
+
+        // 2. Job Auto Checkout (Mặc định 23:59)
+        var checkoutSetting = dbContext.GlobalSettings.FirstOrDefault(s => s.Key == "AUTO_CHECKOUT_TIME")?.Value ?? "23:59";
+        if (TimeOnly.TryParse(checkoutSetting, out var checkoutTime))
+        {
+            string checkoutCron = $"{checkoutTime.Minute} {checkoutTime.Hour} * * *";
+            recurringJobManager.AddOrUpdate<IAttendanceService>(
+                "job-auto-checkout", // ID Job
+                service => service.AutoCheckoutLogicAsync(),
+                checkoutCron,
+                new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time") }
+            );
+            Console.WriteLine($"[Hangfire] Đã đặt lịch AutoCheckout lúc: {checkoutTime}");
+        }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine("⚠️ Lỗi khởi tạo Hangfire từ DB: " + ex.Message);
+    }
+}
+// ==============================================================================
 app.Run();

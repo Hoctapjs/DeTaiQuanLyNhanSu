@@ -1,7 +1,9 @@
 ﻿using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Enums;
 using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services;
 using DocumentFormat.OpenXml.InkML;
+using Hangfire;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using System;
@@ -39,8 +41,18 @@ namespace DeTaiNhanSu.Controllers
     public class AttendanceController : ControllerBase
     {
         private readonly AppDbContext _context;
+        private readonly IAttendanceService _attendanceService; // Service chứa logic
+        private readonly IRecurringJobManager _recurringJobManager; // Quản lý Hangfire
 
-        public AttendanceController(AppDbContext context) => _context = context;
+        public AttendanceController(
+            AppDbContext context,
+            IAttendanceService attendanceService,
+            IRecurringJobManager recurringJobManager)
+        {
+            _context = context;
+            _attendanceService = attendanceService;
+            _recurringJobManager = recurringJobManager;
+        }
 
         // Phương thức hỗ trợ lấy ngày và giờ hiện tại theo múi giờ Việt Nam
         private (DateOnly Date, TimeOnly Time) GetVnTime()
@@ -338,79 +350,152 @@ namespace DeTaiNhanSu.Controllers
 
 
         // ------------------- Tự động kiểm tra nhân viên có vắng mặt ko -------------------
-        [HttpPost("mark-absent")]
-        public async Task<IActionResult> MarkAbsent(CancellationToken ct = default)
+        //[HttpPost("mark-absent")]
+        //public async Task<IActionResult> MarkAbsent(CancellationToken ct = default)
+        //{
+        //    var (today, vnNowTime) = GetVnTime();
+
+        //    // Lấy giờ giới hạn từ GlobalSettings
+        //    var config = await GetAttendanceConfig(ct);
+        //    var absentThresholdTime = config.AbsentMarkThresholdTime;
+
+        //    var weekendSetting = await _context.GlobalSettings
+        //         .AsNoTracking()
+        //         .FirstOrDefaultAsync(s => s.Key == "WEEKEND_DAYS");
+
+        //    // Phân tích các ngày nghỉ (Mặc định: T7, CN nếu không tìm thấy cấu hình)
+        //    string weekendValue = weekendSetting?.Value ?? "Saturday, Sunday";
+        //    var weekendDays = weekendValue.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
+        //                                  .Select(s => Enum.TryParse(s, true, out DayOfWeek day) ? (DayOfWeek?)day : null)
+        //                                  .Where(d => d.HasValue)
+        //                                  .Select(d => d.Value)
+        //                                  .ToList();
+
+        //    // Kiểm tra nếu hôm nay là ngày cuối tuần
+        //    if (weekendDays.Contains(today.DayOfWeek))
+        //    {
+        //        return Ok(new { Success = true, Message = "Hệ thống không đánh dấu vắng mặt vào ngày nghỉ cuối tuần (dựa trên cấu hình GlobalSettings)." });
+        //    }
+        //    var activeEmployees = await _context.Employees.Where(e => e.Status == EmployeeStatus.active).ToListAsync(ct);
+        //    int markedCount = 0;
+
+        //    foreach (var emp in activeEmployees)
+        //    {
+        //        // Lấy lịch làm việc
+        //        var schedule = await _context.WorkSchedules
+        //            .AsNoTracking()
+        //            .Include(ws => ws.ShiftTemplate)
+        //            .FirstOrDefaultAsync(ws => ws.EmployeeId == emp.Id && ws.Date == today, ct);
+
+        //        if (schedule == null) continue;
+
+        //        // CHỈ XỬ LÝ nếu giờ hiện tại >= giờ ngưỡng VÀ ca làm việc bắt đầu <= giờ ngưỡng
+        //        if (vnNowTime >= absentThresholdTime && schedule.ShiftTemplate.StartTime <= absentThresholdTime)
+        //        {
+        //            // Kiểm tra chưa check-in và không có phép
+        //            bool isApprovedLeave = await IsDayApprovedForLeave(emp.Id, today);
+        //            if (!isApprovedLeave)
+        //            {
+        //                var att = await _context.Attendances.FirstOrDefaultAsync(a => a.EmployeeId == emp.Id && a.Date == today, ct);
+        //                if (att == null || att.CheckIn == null)
+        //                {
+        //                    if (att == null)
+        //                    {
+        //                        _context.Attendances.Add(new Attendance
+        //                        {
+        //                            Id = Guid.NewGuid(),
+        //                            EmployeeId = emp.Id,
+        //                            Date = today,
+        //                            Status = AttendanceStatus.absent,
+        //                            Note = $"Vắng (Ca {schedule.ShiftTemplate.Code} - Auto {vnNowTime:HH:mm})"
+        //                        });
+        //                    }
+        //                    else
+        //                    {
+        //                        att.Status = AttendanceStatus.absent;
+        //                        att.Note = $"Vắng (Ca {schedule.ShiftTemplate.Code} - Auto {vnNowTime:HH:mm})";
+        //                    }
+        //                    markedCount++;
+        //                }
+        //            }
+        //        }
+        //    }
+        //    await _context.SaveChangesAsync(ct);
+        //    return Ok(new { Success = true, Message = $"Đã đánh dấu vắng cho {markedCount} nhân viên." });
+        //}
+
+        // 1. API cập nhật giờ Đánh Vắng (Update DB + Update Hangfire)
+        [HttpPost("update-mark-absent-time")]
+        public async Task<IActionResult> UpdateMarkAbsentTime([FromQuery] string time) // time dạng "11:00"
         {
-            var (today, vnNowTime) = GetVnTime();
+            if (!TimeOnly.TryParse(time, out var timeOnly))
+                return BadRequest("Định dạng giờ không hợp lệ (HH:mm)");
 
-            // Lấy giờ giới hạn từ GlobalSettings
-            var config = await GetAttendanceConfig(ct);
-            var absentThresholdTime = config.AbsentMarkThresholdTime;
-
-            var weekendSetting = await _context.GlobalSettings
-                 .AsNoTracking()
-                 .FirstOrDefaultAsync(s => s.Key == "WEEKEND_DAYS");
-
-            // Phân tích các ngày nghỉ (Mặc định: T7, CN nếu không tìm thấy cấu hình)
-            string weekendValue = weekendSetting?.Value ?? "Saturday, Sunday";
-            var weekendDays = weekendValue.Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                                          .Select(s => Enum.TryParse(s, true, out DayOfWeek day) ? (DayOfWeek?)day : null)
-                                          .Where(d => d.HasValue)
-                                          .Select(d => d.Value)
-                                          .ToList();
-
-            // Kiểm tra nếu hôm nay là ngày cuối tuần
-            if (weekendDays.Contains(today.DayOfWeek))
+            // A. Cập nhật vào DB GlobalSettings
+            var setting = await _context.GlobalSettings.FirstOrDefaultAsync(s => s.Key == "ABSENT_MARK_THRESHOLD_TIME");
+            if (setting == null)
             {
-                return Ok(new { Success = true, Message = "Hệ thống không đánh dấu vắng mặt vào ngày nghỉ cuối tuần (dựa trên cấu hình GlobalSettings)." });
+                // Nếu chưa có thì tạo mới (Tùy logic bạn)
+                return BadRequest("Không tìm thấy cấu hình trong DB");
             }
-            var activeEmployees = await _context.Employees.Where(e => e.Status == EmployeeStatus.active).ToListAsync(ct);
-            int markedCount = 0;
+            setting.Value = time;
+            await _context.SaveChangesAsync();
 
-            foreach (var emp in activeEmployees)
-            {
-                // Lấy lịch làm việc
-                var schedule = await _context.WorkSchedules
-                    .AsNoTracking()
-                    .Include(ws => ws.ShiftTemplate)
-                    .FirstOrDefaultAsync(ws => ws.EmployeeId == emp.Id && ws.Date == today, ct);
+            // B. Cập nhật lại lịch cho Hangfire
+            string cron = $"{timeOnly.Minute} {timeOnly.Hour} * * *";
+            _recurringJobManager.AddOrUpdate<IAttendanceService>(
+                "job-mark-absent",
+                service => service.MarkAbsentLogicAsync(),
+                cron,
+                new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time") }
+            );
 
-                if (schedule == null) continue;
-
-                // CHỈ XỬ LÝ nếu giờ hiện tại >= giờ ngưỡng VÀ ca làm việc bắt đầu <= giờ ngưỡng
-                if (vnNowTime >= absentThresholdTime && schedule.ShiftTemplate.StartTime <= absentThresholdTime)
-                {
-                    // Kiểm tra chưa check-in và không có phép
-                    bool isApprovedLeave = await IsDayApprovedForLeave(emp.Id, today);
-                    if (!isApprovedLeave)
-                    {
-                        var att = await _context.Attendances.FirstOrDefaultAsync(a => a.EmployeeId == emp.Id && a.Date == today, ct);
-                        if (att == null || att.CheckIn == null)
-                        {
-                            if (att == null)
-                            {
-                                _context.Attendances.Add(new Attendance
-                                {
-                                    Id = Guid.NewGuid(),
-                                    EmployeeId = emp.Id,
-                                    Date = today,
-                                    Status = AttendanceStatus.absent,
-                                    Note = $"Vắng (Ca {schedule.ShiftTemplate.Code} - Auto {vnNowTime:HH:mm})"
-                                });
-                            }
-                            else
-                            {
-                                att.Status = AttendanceStatus.absent;
-                                att.Note = $"Vắng (Ca {schedule.ShiftTemplate.Code} - Auto {vnNowTime:HH:mm})";
-                            }
-                            markedCount++;
-                        }
-                    }
-                }
-            }
-            await _context.SaveChangesAsync(ct);
-            return Ok(new { Success = true, Message = $"Đã đánh dấu vắng cho {markedCount} nhân viên." });
+            return Ok(new { Success = true, Message = $"Đã cập nhật giờ đánh vắng thành {time}", Cron = cron });
         }
+
+        // 2. API cập nhật giờ Auto Checkout
+        [HttpPost("update-auto-checkout-time")]
+        public async Task<IActionResult> UpdateAutoCheckoutTime([FromQuery] string time) // time dạng "23:59"
+        {
+            if (!TimeOnly.TryParse(time, out var timeOnly))
+                return BadRequest("Định dạng giờ không hợp lệ (HH:mm)");
+
+            // A. Cập nhật DB
+            var setting = await _context.GlobalSettings.FirstOrDefaultAsync(s => s.Key == "AUTO_CHECKOUT_TIME");
+            if (setting != null)
+            {
+                setting.Value = time;
+                await _context.SaveChangesAsync();
+            }
+
+            // B. Cập nhật Hangfire
+            string cron = $"{timeOnly.Minute} {timeOnly.Hour} * * *";
+            _recurringJobManager.AddOrUpdate<IAttendanceService>(
+                "job-auto-checkout",
+                service => service.AutoCheckoutLogicAsync(),
+                cron,
+                new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time") }
+            );
+
+            return Ok(new { Success = true, Message = $"Đã cập nhật giờ auto checkout thành {time}", Cron = cron });
+        }
+
+        // 3. API Chạy thủ công (Vẫn giữ nguyên, chỉ gọi Service)
+        [HttpPost("mark-absent")]
+        public async Task<IActionResult> MarkAbsentManual()
+        {
+            await _attendanceService.MarkAbsentLogicAsync(); // Gọi Service
+            return Ok(new { Success = true, Message = "Đã chạy thủ công logic đánh vắng." });
+        }
+
+        [HttpPost("auto-checkout")]
+        public async Task<IActionResult> AutoCheckoutManual()
+        {
+            await _attendanceService.AutoCheckoutLogicAsync(); // Gọi Service
+            return Ok(new { Success = true, Message = "Đã chạy thủ công logic auto-checkout." });
+        }
+
+
         [HttpGet("status/{employeeId}")]
         public async Task<IActionResult> GetAttendanceStatus(Guid employeeId)
         {
@@ -514,61 +599,64 @@ namespace DeTaiNhanSu.Controllers
                 Shift = shiftInfo
             });
         }
-        [HttpPost("auto-checkout")]
-        public async Task<IActionResult> AutoCheckout(CancellationToken ct = default)
-        {
-            var (today, _) = GetVnTime();
+        //[HttpPost("auto-checkout")]
+        //public async Task<IActionResult> AutoCheckout(CancellationToken ct = default)
+        //{
+        //    var (today, _) = GetVnTime();
 
-            // Lấy giờ auto-checkout từ config
-            var config = await GetAttendanceConfig(ct);
-            var autoCheckoutTime = config.AutoCheckoutTime;
+        //    // Lấy giờ auto-checkout từ config
+        //    var config = await GetAttendanceConfig(ct);
+        //    var autoCheckoutTime = config.AutoCheckoutTime;
 
-            var pending = await _context.Attendances
-                .Where(a => a.Date == today && a.CheckOut == null && a.Status != AttendanceStatus.absent)
-                .ToListAsync(ct);
+        //    var pending = await _context.Attendances
+        //        .Where(a => a.Date == today && a.CheckOut == null && a.Status != AttendanceStatus.absent)
+        //        .ToListAsync(ct);
 
-            if (!pending.Any()) return Ok(new { Success = true, Message = "Không có nhân viên cần auto-checkout." });
+        //    if (!pending.Any()) return Ok(new { Success = true, Message = "Không có nhân viên cần auto-checkout." });
 
-            foreach (var att in pending)
-            {
-                att.CheckOut = autoCheckoutTime;
-                if (att.Status == AttendanceStatus.present) att.Status = AttendanceStatus.completed;
-                att.Note = (att.Note ?? "") + $" | Auto-out {autoCheckoutTime:HH:mm}";
-            }
+        //    foreach (var att in pending)
+        //    {
+        //        att.CheckOut = autoCheckoutTime;
+        //        if (att.Status == AttendanceStatus.present) att.Status = AttendanceStatus.completed;
+        //        att.Note = (att.Note ?? "") + $" | Auto-out {autoCheckoutTime:HH:mm}";
+        //    }
 
-            await _context.SaveChangesAsync(ct);
-            return Ok(new { Success = true, Message = $"Auto check-out cho {pending.Count} nhân viên." });
-        }
+        //    await _context.SaveChangesAsync(ct);
+        //    return Ok(new { Success = true, Message = $"Auto check-out cho {pending.Count} nhân viên." });
+        //}
 
 
         // Các phương thức Hangfire (Đã vô hiệu hóa)
-        [HttpPost("update-mark-absent-time")]
-        public IActionResult UpdateMarkAbsentTime([FromQuery] string cron)
-        {
-            if (string.IsNullOrEmpty(cron))
-                return CreateErrorResponse(400, "Thiếu biểu thức cron!");
+        //[HttpPost("update-mark-absent-time")]
+        //public IActionResult UpdateMarkAbsentTime([FromQuery] string cron)
+        //{
+        //    if (string.IsNullOrEmpty(cron))
+        //        return CreateErrorResponse(400, "Thiếu biểu thức cron!");
 
-            return Ok(new
-            {
-                Success = true,
-                Message = $"Đã cập nhật giờ chạy job MarkAbsent thành công. (Cron: {cron})",
-                Cron = cron
-            });
-        }
+        //    return Ok(new
+        //    {
+        //        Success = true,
+        //        Message = $"Đã cập nhật giờ chạy job MarkAbsent thành công. (Cron: {cron})",
+        //        Cron = cron
+        //    });
+        //}
 
-        [HttpPost("update-auto-checkout-time")]
-        public IActionResult UpdateAutoCheckoutTime([FromQuery] string cron)
-        {
-            if (string.IsNullOrEmpty(cron))
-                return CreateErrorResponse(400, "Thiếu biểu thức cron!");
+        //[HttpPost("update-auto-checkout-time")]
+        //public IActionResult UpdateAutoCheckoutTime([FromQuery] string cron)
+        //{
+        //    if (string.IsNullOrEmpty(cron))
+        //        return CreateErrorResponse(400, "Thiếu biểu thức cron!");
 
-            return Ok(new
-            {
-                Success = true,
-                Message = $"Đã cập nhật giờ chạy job AutoCheckout thành công. (Cron: {cron})",
-                Cron = cron
-            });
-        }
+        //    return Ok(new
+        //    {
+        //        Success = true,
+        //        Message = $"Đã cập nhật giờ chạy job AutoCheckout thành công. (Cron: {cron})",
+        //        Cron = cron
+        //    });
+        //}
+
+
+
 
 
         [HttpGet]
