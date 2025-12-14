@@ -4,6 +4,7 @@ using DeTaiNhanSu.Dtos.RewardPenaltyDtoFol;
 using DeTaiNhanSu.Enums;
 using DeTaiNhanSu.Models;
 using DeTaiNhanSu.Services.Auth;
+using DeTaiNhanSu.Services.Notification;
 using DeTaiNhanSu.Services.Scope;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,12 +19,17 @@ namespace DeTaiNhanSu.Controllers
     {
         private readonly AppDbContext _db;
         private readonly IDataScopeService _dataScope;
+        private readonly INotificationService _notificationService;
 
 
-        public RewardPenaltiesController(AppDbContext db, IDataScopeService dataScope)
+        public RewardPenaltiesController(
+              AppDbContext db,
+              IDataScopeService dataScope,
+              INotificationService notificationService)
         {
             _db = db;
             _dataScope = dataScope;
+            _notificationService = notificationService;
         }
 
         // ========= GET: /api/rewardpenalties?employeeId=&typeId=&kind=&from=&to=&decidedBy=&current=&pageSize=&sort=
@@ -237,9 +243,9 @@ namespace DeTaiNhanSu.Controllers
                 if (req is null)
                     return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
 
-                // Validate FK
-                var empExists = await _db.Employees.AnyAsync(e => e.Id == req.EmployeeId, ct);
-                if (!empExists) return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại.");
+                // 1. Validate dữ liệu (Giữ nguyên)
+                var emp = await _db.Employees.FirstOrDefaultAsync(e => e.Id == req.EmployeeId, ct); // Lấy thông tin NV để lấy tên nếu cần
+                if (emp == null) return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại.");
 
                 var type = await _db.RewardPenaltyTypes.FirstOrDefaultAsync(t => t.Id == req.TypeId, ct);
                 if (type is null) return this.FAIL(StatusCodes.Status404NotFound, "Loại KT/KL không tồn tại.");
@@ -247,17 +253,17 @@ namespace DeTaiNhanSu.Controllers
                 var userExists = await _db.Users.AnyAsync(u => u.Id == req.DecidedBy, ct);
                 if (!userExists) return this.FAIL(StatusCodes.Status404NotFound, "Người quyết định không tồn tại.");
 
-                // Amount
                 if (req.AmountOverride is not null && req.AmountOverride < 0)
                     return this.FAIL(StatusCodes.Status422UnprocessableEntity, "AmountOverride phải ≥ 0.");
 
                 var finalAmount = req.AmountOverride ?? type.DefaultAmount;
                 if (finalAmount is null)
-                    return this.FAIL(StatusCodes.Status422UnprocessableEntity, "Không xác định được số tiền (thiếu AmountOverride và DefaultAmount).");
+                    return this.FAIL(StatusCodes.Status422UnprocessableEntity, "Không xác định được số tiền.");
 
                 if (req.DecidedAt is null)
                     return this.FAIL(StatusCodes.Status400BadRequest, "Thiếu ngày quyết định (decidedAt).");
 
+                // 2. Tạo Entity RewardPenalty (Giữ nguyên)
                 var entity = new RewardPenalty
                 {
                     Id = Guid.NewGuid(),
@@ -270,9 +276,62 @@ namespace DeTaiNhanSu.Controllers
                 };
 
                 _db.RewardPenalties.Add(entity);
+
+                // =================================================================================
+                //  LOGIC MỚI 1: CẬP NHẬT ATTENDANCE (Thêm ghi chú vào ngày DecidedAt)
+                // =================================================================================
+                var attendance = await _db.Attendances
+                    .FirstOrDefaultAsync(a => a.EmployeeId == req.EmployeeId && a.Date == req.DecidedAt.Value, ct);
+
+                if (attendance != null)
+                {
+                    // Tạo nội dung ghi chú: "Thưởng: Lý do..." hoặc "Phạt: Lý do..."
+                    string kindLabel = type.Type == RewardPenaltyKind.reward ? "Thưởng" : "Phạt";
+                    string reasonText = !string.IsNullOrWhiteSpace(req.CustomReason) ? req.CustomReason : type.Name;
+
+                    string noteToAdd = $" | {kindLabel}: {reasonText}";
+
+                    // Nối thêm vào ghi chú có sẵn (nếu có)
+                    if (string.IsNullOrEmpty(attendance.Note))
+                    {
+                        attendance.Note = $"{kindLabel}: {reasonText}";
+                    }
+                    else
+                    {
+                        attendance.Note += noteToAdd;
+                    }
+                    // Không cần _db.Attendances.Update(attendance) vì EF Core tự track thay đổi
+                }
+                // =================================================================================
+
+                // 3. Lưu vào DB
                 await _db.SaveChangesAsync(ct);
 
-                // Trả full
+                // =================================================================================
+                //  LOGIC MỚI 2: GỬI THÔNG BÁO (NOTIFICATION)
+                // =================================================================================
+                // Cần lấy UserId từ EmployeeId để gửi thông báo
+                var userId = await _db.Users
+                    .Where(u => u.EmployeeId == req.EmployeeId)
+                    .Select(u => u.Id)
+                    .FirstOrDefaultAsync(ct);
+
+                if (userId != Guid.Empty)
+                {
+                    // Chạy task gửi thông báo ngầm (không await để trả về response nhanh hơn, 
+                    // hoặc await nếu muốn đảm bảo gửi xong mới báo thành công)
+                    await _notificationService.SendRewardPenaltyNotificationAsync(
+                        targetUserId: userId,
+                        typeName: type.Name,
+                        kind: type.Type.ToString(), // "reward" hoặc "penalty"
+                        amount: finalAmount.Value,
+                        reason: req.CustomReason,
+                        date: req.DecidedAt.Value
+                    );
+                }
+                // =================================================================================
+
+                // 4. Trả về kết quả (Giữ nguyên)
                 var full = await _db.RewardPenalties
                     .AsNoTracking()
                     .Include(r => r.Type)
@@ -296,18 +355,15 @@ namespace DeTaiNhanSu.Controllers
                 return StatusCode(StatusCodes.Status201Created, new
                 {
                     statusCode = StatusCodes.Status201Created,
-                    message = "Tạo quyết định KT/KL thành công.",
+                    message = "Tạo quyết định KT/KL thành công (đã cập nhật chấm công & gửi thông báo).",
                     data = new { result = dto },
                     success = true
                 });
             }
-            catch (DbUpdateException)
+            catch (Exception ex) // Bắt Exception chung để debug tốt hơn
             {
-                return this.FAIL(StatusCodes.Status409Conflict, "Không thể tạo do xung đột dữ liệu (ràng buộc/FK).");
-            }
-            catch
-            {
-                return this.FAIL(StatusCodes.Status500InternalServerError, "Lỗi không xác định khi tạo quyết định KT/KL.");
+                // Console.WriteLine(ex); // Log lỗi nếu cần
+                return this.FAIL(StatusCodes.Status500InternalServerError, $"Lỗi: {ex.Message}");
             }
         }
 

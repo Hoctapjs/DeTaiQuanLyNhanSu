@@ -20,6 +20,9 @@ namespace DeTaiNhanSu.Services.Notification
         /// <summary>
         /// Xóa thông báo cho 1 user và trả về true nếu thành công, false nếu không tìm thấy
         /// </summary>
-  
+        /// 
+
+        Task SendRewardPenaltyNotificationAsync(Guid targetUserId, string typeName, string kind, decimal amount, string? reason, DateOnly date);
+        Task SendTrainingNotificationAsync(string courseName, Guid targetUserId);
     }
 }

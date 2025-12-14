@@ -509,5 +509,59 @@ namespace DeTaiNhanSu.Services.Notification
             await SendHRNotificationAsync(notification, new List<Guid> { targetUserId });
         }
 
+
+        public async Task SendRewardPenaltyNotificationAsync(Guid targetUserId, string typeName, string kind, decimal amount, string? reason, DateOnly date)
+        {
+            // 1. Xác định tiêu đề và nội dung dựa trên loại (Thưởng hay Phạt)
+            // kind thường là "Reward" hoặc "Penalty" từ Enum
+            string titleStr = kind.Equals("Reward", StringComparison.OrdinalIgnoreCase)
+                ? "Quyết định Khen thưởng mới"
+                : "Quyết định Kỷ luật mới";
+
+            string reasonStr = string.IsNullOrWhiteSpace(reason) ? typeName : reason;
+
+            // Format tiền tệ (VD: 500,000 VND)
+            string amountStr = amount.ToString("N0") + " VND";
+
+            // Tạo nội dung thông báo
+            string contentStr = $"Bạn có một quyết định {kind}: {typeName}.\n" +
+                                $"Ngày: {date:dd/MM/yyyy}\n" +
+                                $"Số tiền: {amountStr}\n" +
+                                $"Lý do: {reasonStr}";
+
+            // 2. Tạo đối tượng Notification Model
+            var notification = new Models.Notification
+            {
+                Id = Guid.NewGuid(),
+                Type = "new",
+                Title = titleStr,
+                Content = contentStr,
+                CreatedAt = GetVietnamTime(),
+                ActorId = null, // Hệ thống gửi hoặc lấy ID người quyết định nếu cần
+                ActionUrl = null // Có thể link tới màn hình chi tiết nếu App hỗ trợ
+            };
+
+            // 3. Gọi hàm gửi chung (Tái sử dụng logic lưu DB, SignalR, Firebase)
+            // Đóng gói targetUserId vào List để hàm xử lý đúng
+            await SendHRNotificationAsync(notification, new List<Guid> { targetUserId });
+        }
+
+
+        public async Task SendTrainingNotificationAsync(string courseName, Guid targetUserId)
+        {
+            var notification = new Models.Notification
+            {
+                Id = Guid.NewGuid(),
+                Type = "new", // Loại thông báo để App hiện icon sách vở/đào tạo
+                Title = "Bạn có yêu cầu đào tạo mới",
+                Content = $"Bạn vừa được phân bổ tham gia khóa học: {courseName}. Vui lòng tham gia khóa học",
+                CreatedAt = GetVietnamTime(),
+                ActorId = null,
+                ActionUrl = null
+            };
+
+            // Tái sử dụng hàm gửi chung (lưu DB, bắn SignalR/Firebase)
+            await SendHRNotificationAsync(notification, new List<Guid> { targetUserId });
+        }
     }
 }

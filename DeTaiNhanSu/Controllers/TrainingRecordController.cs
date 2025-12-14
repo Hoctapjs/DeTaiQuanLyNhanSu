@@ -297,6 +297,7 @@ using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos.TrainingRecordDtoFol;
 using DeTaiNhanSu.Enums;
 using DeTaiNhanSu.Models;
+using DeTaiNhanSu.Services.Notification;
 using DeTaiNhanSu.Services.Scope;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -310,11 +311,17 @@ namespace DeTaiNhanSu.Controllers
     {
         private readonly AppDbContext _db;
         private readonly IDataScopeService _dataScope;
+        private readonly INotificationService _notificationService; // ✅ Khai báo Service
 
-        public TrainingRecordController(AppDbContext db, IDataScopeService dataScope)
+        // ✅ Cập nhật Constructor
+        public TrainingRecordController(
+            AppDbContext db,
+            IDataScopeService dataScope,
+            INotificationService notificationService)
         {
             _db = db;
             _dataScope = dataScope;
+            _notificationService = notificationService;
         }
 
         [HttpGet]
@@ -472,16 +479,13 @@ namespace DeTaiNhanSu.Controllers
                     return this.FAIL(StatusCodes.Status400BadRequest, "Dữ liệu không hợp lệ.");
 
                 var allowedDeptId = await _dataScope.GetAllowedDepartmentIdAsync(null, ct);
-
                 var empQuery = _db.Employees.AsNoTracking().AsQueryable();
 
-                // Nếu là Manager -> Chỉ tìm trong phòng ban được phép
                 if (allowedDeptId.HasValue)
                 {
                     empQuery = empQuery.Where(e => e.DepartmentId == allowedDeptId.Value);
                 }
 
-                // Kiểm tra tồn tại (trong phạm vi cho phép)
                 var employeeExists = await empQuery.AnyAsync(e => e.Id == req.EmployeeId, ct);
                 if (!employeeExists)
                     return this.FAIL(StatusCodes.Status404NotFound, "Nhân viên không tồn tại (hoặc không thuộc quyền quản lý).");
@@ -493,40 +497,19 @@ namespace DeTaiNhanSu.Controllers
                     !await _db.Users.AnyAsync(u => u.Id == req.EvaluatedBy, ct))
                     return this.FAIL(StatusCodes.Status404NotFound, "Người đánh giá không tồn tại.");
 
-                // --- TÍNH ĐIỂM ---
-                var totalQuestions = await _db.CourseQuestions
-                    .AsNoTracking()
-                    .CountAsync(q => q.CourseId == req.CourseId, ct);
-
-                var answered = (totalQuestions == 0) ? 0
-                    : await _db.CourseResults.AsNoTracking()
-                        .CountAsync(r => r.EmployeeId == req.EmployeeId && r.CourseId == req.CourseId, ct);
-
-                var correct = (totalQuestions == 0) ? 0
-                    : await _db.CourseResults.AsNoTracking()
-                        .CountAsync(r => r.EmployeeId == req.EmployeeId && r.CourseId == req.CourseId && r.IsCorrect, ct);
+                // --- TÍNH ĐIỂM (Logic cũ giữ nguyên) ---
+                var totalQuestions = await _db.CourseQuestions.AsNoTracking().CountAsync(q => q.CourseId == req.CourseId, ct);
+                var answered = (totalQuestions == 0) ? 0 : await _db.CourseResults.AsNoTracking().CountAsync(r => r.EmployeeId == req.EmployeeId && r.CourseId == req.CourseId, ct);
+                var correct = (totalQuestions == 0) ? 0 : await _db.CourseResults.AsNoTracking().CountAsync(r => r.EmployeeId == req.EmployeeId && r.CourseId == req.CourseId && r.IsCorrect, ct);
 
                 decimal scorePercent = 0m;
                 if (totalQuestions > 0)
                     scorePercent = Math.Round((decimal)correct / totalQuestions * 100m, 2);
 
-                // --- QUY TẮC STATUS ---
                 TrainingStatus status;
-                if (totalQuestions == 0)
-                {
-                    // Không có câu hỏi → chưa thể hoàn thành
-                    status = TrainingStatus.not_completed;
-                }
-                else if (answered < totalQuestions)
-                {
-                    status = TrainingStatus.in_progress;
-                }
-                else
-                {
-                    status = (scorePercent >= course.PassThreshold)
-                        ? TrainingStatus.completed
-                        : TrainingStatus.failed;
-                }
+                if (totalQuestions == 0) status = TrainingStatus.not_completed;
+                else if (answered < totalQuestions) status = TrainingStatus.in_progress;
+                else status = (scorePercent >= course.PassThreshold) ? TrainingStatus.completed : TrainingStatus.failed;
 
                 var tr = new TrainingRecord
                 {
@@ -542,6 +525,24 @@ namespace DeTaiNhanSu.Controllers
                 _db.TrainingRecords.Add(tr);
                 await _db.SaveChangesAsync(ct);
 
+                // =================================================================================
+                // ✅ LOGIC MỚI: GỬI THÔNG BÁO (NOTIFICATION)
+                // =================================================================================
+                // 1. Tìm User ID từ Employee ID (Vì thông báo gửi cho User)
+                var userId = await _db.Users
+                    .Where(u => u.EmployeeId == req.EmployeeId)
+                    .Select(u => u.Id)
+                    .FirstOrDefaultAsync(ct);
+
+                // 2. Nếu nhân viên này có tài khoản User thì gửi thông báo
+                if (userId != Guid.Empty)
+                {
+                    // Chạy task gửi thông báo (dùng await để đảm bảo gửi xong, hoặc bỏ await nếu muốn nhanh)
+                    await _notificationService.SendTrainingNotificationAsync(course.Name, userId);
+                }
+                // =================================================================================
+
+                // Trả về kết quả (Logic cũ giữ nguyên)
                 var fullRecord = await _db.TrainingRecords
                     .AsNoTracking()
                     .Include(x => x.Employee)
@@ -567,11 +568,8 @@ namespace DeTaiNhanSu.Controllers
                 return StatusCode(StatusCodes.Status201Created, new
                 {
                     statusCode = StatusCodes.Status201Created,
-                    message = "Tạo hồ sơ đào tạo thành công (điểm tính tự động).",
-                    data = new
-                    {
-                        result = dto
-                    },
+                    message = "Tạo hồ sơ đào tạo thành công (đã gửi thông báo).",
+                    data = new { result = dto },
                     success = true
                 });
             }
