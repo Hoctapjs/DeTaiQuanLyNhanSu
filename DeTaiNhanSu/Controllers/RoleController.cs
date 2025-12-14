@@ -2,9 +2,11 @@
 using DeTaiNhanSu.Common;
 using DeTaiNhanSu.DbContextProject;
 using DeTaiNhanSu.Dtos;
+using DeTaiNhanSu.Hubs;
 using DeTaiNhanSu.Models;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.SignalR;
 using Microsoft.EntityFrameworkCore;
 
 namespace DeTaiNhanSu.Controllers
@@ -14,10 +16,12 @@ namespace DeTaiNhanSu.Controllers
     public class RoleController : ControllerBase
     {
         private readonly AppDbContext _db;
+        private readonly IHubContext<AuthHub> _hubContext; 
 
-        public RoleController(AppDbContext db)
+        public RoleController(AppDbContext db, IHubContext<AuthHub> hubContext)
         {
             _db = db;
+            _hubContext = hubContext;
         }
 
         //[HttpGet]
@@ -369,6 +373,89 @@ namespace DeTaiNhanSu.Controllers
                 return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi cập nhật role.");
             }
         }
+
+        //[HttpPut("{id:guid}")]
+        //[Authorize(Roles = "Admin")]
+        //public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
+        //{
+        //    try
+        //    {
+        //        if (body.ValueKind != JsonValueKind.Object)
+        //            return this.FAIL(StatusCodes.Status400BadRequest, "Body phải là JSON object.");
+
+        //        var role = await _db.Roles.FirstOrDefaultAsync(r => r.Id == id, ct);
+        //        if (role is null)
+        //            return this.FAIL(StatusCodes.Status404NotFound, "Role không tồn tại.");
+
+        //        // helper
+        //        static string? GetStringOrNull(JsonElement prop) =>
+        //            prop.ValueKind switch
+        //            {
+        //                JsonValueKind.Null => null,
+        //                JsonValueKind.String => string.IsNullOrWhiteSpace(prop.GetString()) ? null : prop.GetString()!.Trim(),
+        //                _ => null
+        //            };
+
+        //        bool hasChanges = false; // Cờ đánh dấu có thay đổi hay không
+
+        //        // name
+        //        if (body.TryGetProperty("name", out var nameProp))
+        //        {
+        //            var newName = GetStringOrNull(nameProp);
+        //            if (string.IsNullOrWhiteSpace(newName))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "Tên role không được để trống.");
+
+        //            if (!string.Equals(role.Name, newName, StringComparison.OrdinalIgnoreCase))
+        //            {
+        //                var dup = await _db.Roles.AnyAsync(r => r.Name == newName!, ct);
+        //                if (dup) return this.FAIL(StatusCodes.Status409Conflict, "Tên role đã tồn tại.");
+        //                role.Name = newName!;
+        //                hasChanges = true;
+        //            }
+        //        }
+
+        //        // description
+        //        if (body.TryGetProperty("description", out var descProp))
+        //        {
+        //            var newDesc = GetStringOrNull(descProp);
+        //            if (role.Description != newDesc)
+        //            {
+        //                role.Description = newDesc;
+        //                hasChanges = true;
+        //            }
+        //        }
+
+        //        await _db.SaveChangesAsync(ct);
+
+        //        // ================== SIGNALR LOGIC ==================
+        //        if (hasChanges)
+        //        {
+        //            // 1. Lấy danh sách User ID thuộc Role này
+        //            // Lưu ý: SignalR cần UserId dạng String
+        //            var userIds = await _db.Users
+        //                .Where(u => u.RoleId == id)
+        //                .Select(u => u.Id.ToString())
+        //                .ToListAsync(ct);
+
+        //            if (userIds.Any())
+        //            {
+        //                // 2. Gửi tín hiệu ForceRefreshToken tới danh sách user đó
+        //                await _hubContext.Clients.Users(userIds).SendAsync("ForceRefreshToken", cancellationToken: ct);
+        //            }
+        //        }
+        //        // ===================================================
+
+        //        return this.OK(message: "Cập nhật role thành công.");
+        //    }
+        //    catch (DbUpdateConcurrencyException)
+        //    {
+        //        return this.FAIL(StatusCodes.Status409Conflict, "Xung đột cập nhật: bản ghi đã thay đổi trước đó.");
+        //    }
+        //    catch (Exception ex) // Log ex nếu cần
+        //    {
+        //        return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi cập nhật role.");
+        //    }
+        //}
 
         [HttpDelete("{id:guid}")]
         [Authorize(Roles = "Admin")]

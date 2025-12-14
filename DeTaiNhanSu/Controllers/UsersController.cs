@@ -10,6 +10,8 @@ using DeTaiNhanSu.Common;
 using Microsoft.EntityFrameworkCore;
 using DeTaiNhanSu.Dtos;
 using System.Text.Json;
+using DeTaiNhanSu.Hubs;
+using Microsoft.AspNetCore.SignalR;
 
 
 namespace DeTaiNhanSu.Controllers
@@ -35,11 +37,13 @@ namespace DeTaiNhanSu.Controllers
         // nghiệp vụ
         private readonly AppDbContext _db;
         private readonly IPasswordHasher<User> _hasher;
+        private readonly IHubContext<AuthHub> _hubContext; // 1. Khai báo HubContext
 
-        public UsersController(AppDbContext db, IPasswordHasher<User> hasher)
+        public UsersController(AppDbContext db, IPasswordHasher<User> hasher, IHubContext<AuthHub> hubContext)
         {
             _db = db;
             _hasher = hasher;
+            _hubContext = hubContext;
         }
 
         // GET /api/users/Search?q=son&page=1&pageSize=20&role=Admin&status=active
@@ -321,9 +325,108 @@ namespace DeTaiNhanSu.Controllers
         //    }
         //}
 
+        //[HttpPut("{id:guid}")]
+        //[Authorize(Roles = "HR, Admin")]
+        //[HasPermission("Users.Manage")]
+        //public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
+        //{
+        //    try
+        //    {
+        //        if (body.ValueKind != JsonValueKind.Object)
+        //            return this.FAIL(StatusCodes.Status400BadRequest, "Body phải là JSON object.");
+
+        //        var u = await _db.Users.FirstOrDefaultAsync(x => x.Id == id, ct);
+        //        if (u is null)
+        //            return this.FAIL(StatusCodes.Status404NotFound, "User không tồn tại.");
+
+        //        // helpers
+        //        static string? GetStringOrNull(JsonElement prop) =>
+        //            prop.ValueKind switch
+        //            {
+        //                JsonValueKind.Null => null,
+        //                JsonValueKind.String => string.IsNullOrWhiteSpace(prop.GetString()) ? null : prop.GetString()!.Trim(),
+        //                _ => null
+        //            };
+
+        //        static Guid? GetGuidOrNull(JsonElement prop)
+        //        {
+        //            if (prop.ValueKind == JsonValueKind.Null) return null;
+        //            if (prop.ValueKind == JsonValueKind.String && Guid.TryParse(prop.GetString(), out var g)) return g;
+        //            return null;
+        //        }
+
+        //        static bool TryGetInt(JsonElement prop, out int? value)
+        //        {
+        //            value = null;
+        //            if (prop.ValueKind == JsonValueKind.Null) { value = null; return true; }
+        //            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var i)) { value = i; return true; }
+        //            if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var j)) { value = j; return true; }
+        //            return false;
+        //        }
+
+        //        // userName (unique, non-empty) — chỉ xử lý khi key "userName" xuất hiện
+        //        if (body.TryGetProperty("userName", out var userNameProp))
+        //        {
+        //            var newUserName = GetStringOrNull(userNameProp);
+        //            if (string.IsNullOrWhiteSpace(newUserName))
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "UserName không được để trống.");
+
+        //            if (!string.Equals(u.UserName, newUserName, StringComparison.OrdinalIgnoreCase))
+        //            {
+        //                var dup = await _db.Users.AnyAsync(x => x.UserName == newUserName!, ct);
+        //                if (dup) return this.FAIL(StatusCodes.Status409Conflict, "UserName đã tồn tại.");
+
+        //                u.UserName = newUserName!;
+        //                // Nếu bạn có cột NormalizedUserName:
+        //                // u.NormalizedUserName = newUserName!.ToUpperInvariant();
+        //            }
+        //        }
+
+        //        // roleId (GUID, bắt buộc GUID hợp lệ; tùy DB có cho null không)
+        //        if (body.TryGetProperty("roleId", out var roleProp))
+        //        {
+        //            var newRoleId = GetGuidOrNull(roleProp);
+        //            if (newRoleId is null)
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "roleId phải là GUID hợp lệ.");
+
+        //            if (newRoleId != u.RoleId)
+        //            {
+        //                var role = await _db.Roles.FirstOrDefaultAsync(r => r.Id == newRoleId.Value, ct);
+        //                if (role is null)
+        //                    return this.FAIL(StatusCodes.Status404NotFound, "Role không tồn tại.");
+
+        //                u.RoleId = newRoleId.Value;
+        //            }
+        //        }
+
+        //        // status (int enum, không cho null nếu cột không nullable)
+        //        if (body.TryGetProperty("status", out var statusProp))
+        //        {
+        //            if (!TryGetInt(statusProp, out var newStatus) || !newStatus.HasValue)
+        //                return this.FAIL(StatusCodes.Status400BadRequest, "status phải là số và không được null.");
+
+        //            // (tuỳ chọn) validate range enum
+        //            // if (newStatus < 0 || newStatus > 5) return this.FAIL(400, "Giá trị status không hợp lệ.");
+
+        //            u.Status = (UserStatus)newStatus.Value;
+        //        }
+
+        //        await _db.SaveChangesAsync(ct);
+        //        return this.OK(message: "Cập nhật user thành công.");
+        //    }
+        //    catch (DbUpdateConcurrencyException)
+        //    {
+        //        return this.FAIL(StatusCodes.Status409Conflict, "Xung đột cập nhật: bản ghi đã thay đổi trước đó.");
+        //    }
+        //    catch
+        //    {
+        //        return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi cập nhật user.");
+        //    }
+        //}
+
         [HttpPut("{id:guid}")]
         [Authorize(Roles = "HR, Admin")]
-        [HasPermission("Users.Manage")]
+        // [HasPermission("Users.Manage")] // Uncomment nếu dùng permission
         public async Task<IActionResult> Update(Guid id, [FromBody] JsonElement body, CancellationToken ct)
         {
             try
@@ -335,7 +438,7 @@ namespace DeTaiNhanSu.Controllers
                 if (u is null)
                     return this.FAIL(StatusCodes.Status404NotFound, "User không tồn tại.");
 
-                // helpers
+                // --- Helpers ---
                 static string? GetStringOrNull(JsonElement prop) =>
                     prop.ValueKind switch
                     {
@@ -359,8 +462,12 @@ namespace DeTaiNhanSu.Controllers
                     if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var j)) { value = j; return true; }
                     return false;
                 }
+                // ----------------
 
-                // userName (unique, non-empty) — chỉ xử lý khi key "userName" xuất hiện
+                // Cờ đánh dấu thay đổi liên quan đến bảo mật (Role, Status)
+                bool securityChanged = false;
+
+                // 1. UserName
                 if (body.TryGetProperty("userName", out var userNameProp))
                 {
                     var newUserName = GetStringOrNull(userNameProp);
@@ -373,12 +480,12 @@ namespace DeTaiNhanSu.Controllers
                         if (dup) return this.FAIL(StatusCodes.Status409Conflict, "UserName đã tồn tại.");
 
                         u.UserName = newUserName!;
-                        // Nếu bạn có cột NormalizedUserName:
-                        // u.NormalizedUserName = newUserName!.ToUpperInvariant();
+                        // Thay đổi username cũng nên force logout/refresh để cập nhật token claim "Name"
+                        securityChanged = true;
                     }
                 }
 
-                // roleId (GUID, bắt buộc GUID hợp lệ; tùy DB có cho null không)
+                // 2. RoleId
                 if (body.TryGetProperty("roleId", out var roleProp))
                 {
                     var newRoleId = GetGuidOrNull(roleProp);
@@ -392,29 +499,48 @@ namespace DeTaiNhanSu.Controllers
                             return this.FAIL(StatusCodes.Status404NotFound, "Role không tồn tại.");
 
                         u.RoleId = newRoleId.Value;
+                        securityChanged = true; // Đánh dấu đã đổi quyền
                     }
                 }
 
-                // status (int enum, không cho null nếu cột không nullable)
+                // 3. Status
                 if (body.TryGetProperty("status", out var statusProp))
                 {
                     if (!TryGetInt(statusProp, out var newStatus) || !newStatus.HasValue)
                         return this.FAIL(StatusCodes.Status400BadRequest, "status phải là số và không được null.");
 
-                    // (tuỳ chọn) validate range enum
-                    // if (newStatus < 0 || newStatus > 5) return this.FAIL(400, "Giá trị status không hợp lệ.");
+                    // Validate enum range nếu cần
+                    if (!Enum.IsDefined(typeof(UserStatus), newStatus.Value))
+                        return this.FAIL(StatusCodes.Status400BadRequest, "Giá trị status không hợp lệ.");
 
-                    u.Status = (UserStatus)newStatus.Value;
+                    var newStatusEnum = (UserStatus)newStatus.Value;
+                    if (u.Status != newStatusEnum)
+                    {
+                        u.Status = newStatusEnum;
+                        // Nếu status đổi (ví dụ Active -> Locked), cần force refresh ngay
+                        securityChanged = true;
+                    }
                 }
 
                 await _db.SaveChangesAsync(ct);
+
+                // ================== SIGNALR LOGIC ==================
+                if (securityChanged)
+                {
+                    // Gửi tín hiệu chỉ riêng cho User này
+                    // SignalR mặc định map UserIdentifier với u.Id.ToString()
+                    await _hubContext.Clients.User(u.Id.ToString())
+                        .SendAsync("ForceRefreshToken", cancellationToken: ct);
+                }
+                // ===================================================
+
                 return this.OK(message: "Cập nhật user thành công.");
             }
             catch (DbUpdateConcurrencyException)
             {
                 return this.FAIL(StatusCodes.Status409Conflict, "Xung đột cập nhật: bản ghi đã thay đổi trước đó.");
             }
-            catch
+            catch (Exception)
             {
                 return this.FAIL(StatusCodes.Status500InternalServerError, "Đã xảy ra lỗi không xác định khi cập nhật user.");
             }

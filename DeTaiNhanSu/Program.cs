@@ -29,6 +29,7 @@ using AuditActionFilter = DeTaiNhanSu.Services.Log.AuditActionFilter;
 // [MỚI 1] Thêm namespace Hangfire và Services
 using Hangfire;
 using DeTaiNhanSu.Services;
+using DocumentFormat.OpenXml.Wordprocessing;
 
 QuestPDF.Settings.License = LicenseType.Community;
 
@@ -109,83 +110,183 @@ if (FirebaseApp.DefaultInstance == null)
 var jwt = builder.Configuration.GetSection("Jwt");
 var signingKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwt["Key"]!));
 
+//builder.Services
+//    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+//    .AddJwtBearer(o =>
+//    {
+//        o.TokenValidationParameters = new TokenValidationParameters
+//        {
+//            ValidateIssuer = true,
+//            ValidIssuer = jwt["Issuer"],
+//            ValidateAudience = true,
+//            ValidAudience = jwt["Audience"],
+//            ValidateIssuerSigningKey = true,
+//            IssuerSigningKey = signingKey,
+//            ValidateLifetime = true,
+//            ClockSkew = TimeSpan.FromMinutes(1)
+//        };
+
+//        o.Events = new JwtBearerEvents
+//        {
+//            OnMessageReceived = context =>
+//            {
+//                // 1. Lấy token từ Query String (tên mặc định là access_token)
+//                var accessToken = context.Request.Query["access_token"];
+
+//                // 2. Lấy path request
+//                var path = context.HttpContext.Request.Path;
+
+//                // 3. Nếu có token và request gửi đến Hub SignalR
+//                if (!string.IsNullOrEmpty(accessToken) &&
+//                    (path.StartsWithSegments("/hubs"))) // Đảm bảo khớp với map hub: app.MapHub<...>("hubs/auth")
+//                {
+//                    // Gán token vào context để Middleware xác thực xử lý tiếp
+//                    context.Token = accessToken;
+//                }
+//                return Task.CompletedTask;
+//            }
+//        };
+
+//        // Chuẩn hóa 401/403 theo schema
+//        o.Events = new JwtBearerEvents
+//        {
+//            OnChallenge = async context =>
+//            {
+//                context.HandleResponse();
+//                var isExpired = context.AuthenticateFailure is SecurityTokenExpiredException;
+//                var message = isExpired
+//                    ? "Token đã hết hạn."
+//                    : "Bạn chưa đăng nhập hoặc token không hợp lệ.";
+
+//                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+//                context.Response.ContentType = "application/json; charset=utf-8";
+
+//                var payload = JsonSerializer.Serialize(new
+//                {
+//                    statusCode = StatusCodes.Status401Unauthorized,
+//                    message,
+//                    data = Array.Empty<object>(),
+//                    success = false
+//                });
+
+//                await context.Response.WriteAsync(payload);
+//            },
+//            OnForbidden = async context =>
+//            {
+//                context.Response.StatusCode = StatusCodes.Status403Forbidden;
+//                context.Response.ContentType = "application/json; charset=utf-8";
+
+//                var payload = JsonSerializer.Serialize(new
+//                {
+//                    statusCode = StatusCodes.Status403Forbidden,
+//                    message = "Bạn không có quyền truy cập tài nguyên này.",
+//                    data = Array.Empty<object>(),
+//                    success = false
+//                });
+
+//                await context.Response.WriteAsync(payload);
+//            }
+//        };
+
+//        o.Events = new JwtBearerEvents
+//        {
+//            OnMessageReceived = context =>
+//            {
+//                // Lấy JWT từ query string cho WebSocket
+//                var accessToken = context.Request.Query["access_token"];
+
+//                // Chỉ lấy token khi request đi vào Hub
+//                var path = context.HttpContext.Request.Path;
+//                if (!string.IsNullOrEmpty(accessToken) &&
+//                    ((path.StartsWithSegments("/notificationHub")) || (path.StartsWithSegments("/notificationHubTable"))))
+//                {
+//                    context.Token = accessToken;
+//                }
+
+//                return Task.CompletedTask;
+//            }
+//        };
+
+//    });
+
 builder.Services
-    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
-    .AddJwtBearer(o =>
-    {
-        o.TokenValidationParameters = new TokenValidationParameters
-        {
-            ValidateIssuer = true,
-            ValidIssuer = jwt["Issuer"],
-            ValidateAudience = true,
-            ValidAudience = jwt["Audience"],
-            ValidateIssuerSigningKey = true,
-            IssuerSigningKey = signingKey,
-            ValidateLifetime = true,
-            ClockSkew = TimeSpan.FromMinutes(1)
-        };
+  .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+  .AddJwtBearer(o =>
+  {
+      o.TokenValidationParameters = new TokenValidationParameters
+      {
+          ValidateIssuer = true,
+          ValidIssuer = jwt["Issuer"],
+          ValidateAudience = true,
+          ValidAudience = jwt["Audience"],
+          ValidateIssuerSigningKey = true,
+          IssuerSigningKey = signingKey,
+          ValidateLifetime = true,
+          ClockSkew = TimeSpan.FromMinutes(1)
+      };
 
-        // Chuẩn hóa 401/403 theo schema
-        o.Events = new JwtBearerEvents
-        {
-            OnChallenge = async context =>
-            {
-                context.HandleResponse();
-                var isExpired = context.AuthenticateFailure is SecurityTokenExpiredException;
-                var message = isExpired
-                    ? "Token đã hết hạn."
-                    : "Bạn chưa đăng nhập hoặc token không hợp lệ.";
+      o.Events = new JwtBearerEvents
+      {
+          OnMessageReceived = context =>
+          {
+              // token từ query string cho SignalR (WS/SSE)
+              var accessToken = context.Request.Query["access_token"];
+              var path = context.HttpContext.Request.Path;
 
-                context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-                context.Response.ContentType = "application/json; charset=utf-8";
+              if (!string.IsNullOrEmpty(accessToken) &&
+                  (
+                      path.StartsWithSegments("/hubs/auth") ||
+                      path.StartsWithSegments("/notificationHub") ||
+                      path.StartsWithSegments("/notificationHubTable")
+                  ))
+              {
+                  context.Token = accessToken;
+              }
 
-                var payload = JsonSerializer.Serialize(new
-                {
-                    statusCode = StatusCodes.Status401Unauthorized,
-                    message,
-                    data = Array.Empty<object>(),
-                    success = false
-                });
+              return Task.CompletedTask;
+          },
 
-                await context.Response.WriteAsync(payload);
-            },
-            OnForbidden = async context =>
-            {
-                context.Response.StatusCode = StatusCodes.Status403Forbidden;
-                context.Response.ContentType = "application/json; charset=utf-8";
+          OnChallenge = async context =>
+          {
+              context.HandleResponse();
 
-                var payload = JsonSerializer.Serialize(new
-                {
-                    statusCode = StatusCodes.Status403Forbidden,
-                    message = "Bạn không có quyền truy cập tài nguyên này.",
-                    data = Array.Empty<object>(),
-                    success = false
-                });
+              var isExpired = context.AuthenticateFailure is SecurityTokenExpiredException;
+              var message = isExpired
+                  ? "Token đã hết hạn."
+                  : "Bạn chưa đăng nhập hoặc token không hợp lệ.";
 
-                await context.Response.WriteAsync(payload);
-            }
-        };
+              context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+              context.Response.ContentType = "application/json; charset=utf-8";
 
-        o.Events = new JwtBearerEvents
-        {
-            OnMessageReceived = context =>
-            {
-                // Lấy JWT từ query string cho WebSocket
-                var accessToken = context.Request.Query["access_token"];
+              var payload = JsonSerializer.Serialize(new
+              {
+                  statusCode = StatusCodes.Status401Unauthorized,
+                  message,
+                  data = Array.Empty<object>(),
+                  success = false
+              });
 
-                // Chỉ lấy token khi request đi vào Hub
-                var path = context.HttpContext.Request.Path;
-                if (!string.IsNullOrEmpty(accessToken) &&
-                    ((path.StartsWithSegments("/notificationHub")) || (path.StartsWithSegments("/notificationHubTable"))))
-                {
-                    context.Token = accessToken;
-                }
+              await context.Response.WriteAsync(payload);
+          },
 
-                return Task.CompletedTask;
-            }
-        };
+          OnForbidden = async context =>
+          {
+              context.Response.StatusCode = StatusCodes.Status403Forbidden;
+              context.Response.ContentType = "application/json; charset=utf-8";
 
-    });
+              var payload = JsonSerializer.Serialize(new
+              {
+                  statusCode = StatusCodes.Status403Forbidden,
+                  message = "Bạn không có quyền truy cập tài nguyên này.",
+                  data = Array.Empty<object>(),
+                  success = false
+              });
+
+              await context.Response.WriteAsync(payload);
+          }
+      };
+  });
+
 
 // ==== Authorization (roles + permissions) ====
 builder.Services.AddAuthorization();
@@ -281,50 +382,5 @@ app.MapControllers();
 
 app.MapHub<NotificationNewHub>("/notificationHubTable");
 app.MapHub<PublicNotificationHub>("/notificationHub");
-
-// ==============================================================================
-// [MỚI 4] LOGIC TỰ ĐỘNG ĐỌC GIỜ TỪ DB VÀ ĐẶT LỊCH KHI KHỞI ĐỘNG (Trước app.Run)
-// ==============================================================================
-using (var scope = app.Services.CreateScope())
-{
-    var services = scope.ServiceProvider;
-    var dbContext = services.GetRequiredService<AppDbContext>();
-    var recurringJobManager = services.GetRequiredService<IRecurringJobManager>();
-
-    try
-    {
-        // 1. Job Đánh vắng (Mặc định 11:00)
-        var absentSetting = dbContext.GlobalSettings.FirstOrDefault(s => s.Key == "ABSENT_MARK_THRESHOLD_TIME")?.Value ?? "11:00";
-        if (TimeOnly.TryParse(absentSetting, out var absentTime))
-        {
-            string absentCron = $"{absentTime.Minute} {absentTime.Hour} * * *";
-            recurringJobManager.AddOrUpdate<IAttendanceService>(
-                "job-mark-absent", // ID Job
-                service => service.MarkAbsentLogicAsync(),
-                absentCron,
-                new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time") }
-            );
-            Console.WriteLine($"[Hangfire] Đã đặt lịch MarkAbsent lúc: {absentTime}");
-        }
-
-        // 2. Job Auto Checkout (Mặc định 23:59)
-        var checkoutSetting = dbContext.GlobalSettings.FirstOrDefault(s => s.Key == "AUTO_CHECKOUT_TIME")?.Value ?? "23:59";
-        if (TimeOnly.TryParse(checkoutSetting, out var checkoutTime))
-        {
-            string checkoutCron = $"{checkoutTime.Minute} {checkoutTime.Hour} * * *";
-            recurringJobManager.AddOrUpdate<IAttendanceService>(
-                "job-auto-checkout", // ID Job
-                service => service.AutoCheckoutLogicAsync(),
-                checkoutCron,
-                new RecurringJobOptions { TimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time") }
-            );
-            Console.WriteLine($"[Hangfire] Đã đặt lịch AutoCheckout lúc: {checkoutTime}");
-        }
-    }
-    catch (Exception ex)
-    {
-        Console.WriteLine("⚠️ Lỗi khởi tạo Hangfire từ DB: " + ex.Message);
-    }
-}
-// ==============================================================================
+app.MapHub<AuthHub>("/hubs/auth");
 app.Run();
