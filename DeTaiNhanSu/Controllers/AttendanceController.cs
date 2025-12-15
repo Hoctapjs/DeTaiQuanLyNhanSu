@@ -182,8 +182,17 @@ namespace DeTaiNhanSu.Controllers
                 return CreateErrorResponse(400, "Bạn không kết nối WiFi công ty.");
 
             var existing = await _context.Attendances.FirstOrDefaultAsync(a => a.EmployeeId == empId && a.Date == today, ct);
-            if (existing != null && existing.CheckIn != null)
-                return CreateErrorResponse(400, $"Bạn đã check-in hôm nay lúc {existing.CheckIn:HH:mm:ss} rồi!");
+            if (existing != null)
+            {
+                if (existing.Status == AttendanceStatus.absent)
+                {
+                    return CreateErrorResponse(400, $"Bạn đã bị đánh dấu VẮNG MẶT hôm nay. Vui lòng liên hệ HR.");
+                }
+                if (existing.CheckIn != null)
+                {
+                    return CreateErrorResponse(400, $"Bạn đã check-in hôm nay lúc {existing.CheckIn:HH:mm:ss} rồi!");
+                }
+            }
 
             // 4. XỬ LÝ TRẠNG THÁI (Dùng Shift StartTime & Config Tolerance)
             var shiftStartTime = shift.StartTime;
